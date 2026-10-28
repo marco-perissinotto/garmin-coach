@@ -202,3 +202,44 @@ def test_killed_run_leaves_normalized_tables_consistent(conn, settings: Settings
     assert before["activity"] and before["sleep"]
     normalize.rebuild_all(conn)
     assert snapshot() == before
+
+
+def test_learned_cap_only_after_success_and_never_below_7_days(conn, settings: Settings, fake: FakeGarmin,
+                                                              clock: FakeClock) -> None:
+    """Regression: a stale one-day learned cap turned a 4000-day backfill into ~4900 planned calls."""
+    repo.set_learned_cap(conn, "sleep.range", 1, clock())  # left over by the old cascade
+    calls = Planner(conn, settings, clock()).plan({Tier.H})
+    assert sum(c.endpoint == "sleep.range" for c in calls) <= 366 // 7 + 2
+
+    conn.execute("DELETE FROM endpoint_cap")
+    fake.errors["weight.all"] = BadRequestError("rejected", 400)
+    run(conn, settings, fake, clock, {Tier.H})
+    assert repo.learned_cap(conn, "weight.all") == 0  # rejected, not "learned 4 days"
+
+    def reject_wide(args) -> None:  # type: ignore[no-untyped-def]
+        if range_days(f"{args['start']}..{args['end']}") > 20:
+            raise BadRequestError("too wide", 400)
+
+    conn.execute("DELETE FROM endpoint_cap")
+    conn.execute("DELETE FROM sync_state WHERE endpoint='hrv.range'")
+    f2 = FakeGarmin()
+    f2.errors["hrv.range"] = reject_wide
+    run(conn, settings, f2, clock, {Tier.H})
+    cap = repo.learned_cap(conn, "hrv.range")
+    assert cap is not None and 7 <= cap <= 20  # learned from a window that worked, below the rejected size
+
+
+def test_server_error_on_wide_window_is_split(conn, settings: Settings, fake: FakeGarmin, clock: FakeClock) -> None:
+    """Seen live: usersummary.range answered 500 to full-year windows for 2024 and 2025."""
+    from garmin_coach.garmin.client import ServerError
+
+    def fail_wide(args) -> None:  # type: ignore[no-untyped-def]
+        if range_days(f"{args['start']}..{args['end']}") > 200:
+            raise ServerError("HTTP 500 after 5 tries", 500)
+
+    fake.errors["usersummary.range"] = fail_wide
+    res = run(conn, settings, fake, clock, {Tier.H})
+    assert res.status == "done" and not repo.is_cache_empty(conn)
+    assert conn.execute("SELECT COUNT(*) FROM daily WHERE rhr IS NOT NULL").fetchone()[0] >= 365
+    cap = repo.learned_cap(conn, "usersummary.range")
+    assert cap is not None and 7 <= cap <= 200

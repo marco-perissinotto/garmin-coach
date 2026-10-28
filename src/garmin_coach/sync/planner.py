@@ -26,6 +26,7 @@ RECENT_PAGE_LIMIT = 20
 RECENT_MAX_PAGES = 3
 BACKFILL_PAGE_LIMIT = 100
 WEIGHT_GOAL_DAYS = 30
+MIN_LEARNED_CAP_DAYS = 7
 
 
 @dataclass
@@ -71,6 +72,8 @@ class Planner:
     def cap(self, endpoint: str) -> int | None:
         default = ep.get(endpoint).cap_days
         learned = repo.learned_cap(self.conn, endpoint) or None  # 0 = rejected, handled by enabled()
+        if learned is not None:
+            learned = max(learned, MIN_LEARNED_CAP_DAYS)  # never plan one-day windows from a stale learned cap
         if default is None:
             return learned
         return min(default, learned) if learned else default

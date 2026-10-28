@@ -103,3 +103,20 @@ page is normalized. Covered by `test_killed_run_leaves_normalized_tables_consist
 in one go; `backfill` in the CLI follows the chain. Orphaned/cancelled continuations are still picked up by the next
 startup check. On this machine `settings.yaml` sets `backfill_days: 4000` and `backfill_call_gap_ms: 1500`
 (~25 min in the background). Covered by `test_budget_limited_backfill_chains_until_done`.
+
+**D-034 Window caps are learned on success, never below 7 days.** Launching the full-history backfill planned 4 886
+calls instead of ~1 050: the first live run had persisted a learned cap of 1 day for `weight.all` at the moment of
+each 400, before knowing whether the smaller window worked, so 4 000 days became 4 000 one-day calls. The job was
+cancelled after 11 calls. Now a shrunk window that *succeeds* sets the cap (≥ 7 days), and the planner ignores any
+stored cap below 7 days. The stale row was deleted. Regression test:
+`test_learned_cap_only_after_success_and_never_below_7_days`.
+
+**D-035 Persistent 5xx on a range call halves the window.** During the full-history load, `usersummary.range`
+answered HTTP 500 (after 5 tries) to the full-year windows 2023-12-28..2024-12-26 and 2024-12-27..2025-12-26, while
+half-year windows worked. A `ServerError` on a range call wider than 7 days now splits it like a 400 does; the cap
+learned on success (182 days) is used from then on. Unlike a 400, a 5xx never disables the endpoint.
+
+**D-036 Full-history result (2026-10-28).** 4 chained backfill jobs (#4–#7), ~1 050 HTTP calls at 1.5 s, no 429.
+Cache: 1 311 activities from 2016-05-30, daily data from 2020, sleep from 2022, HRV from 2023 (what the devices of the
+time recorded). Activity gap 2017–2020 is in Garmin, not a sync error. `weight.all` rejected again (body `{}`),
+so the account has no weigh-ins via this endpoint; still disabled for 7 days at a time.

@@ -27,6 +27,7 @@ from ..garmin.client import (
     GarminError,
     NetworkError,
     NotFoundError,
+    ServerError,
 )
 from ..garmin.endpoints import Tier
 from ..secrets import redact
@@ -123,6 +124,10 @@ class Runner:
                 follow = planner.resolve(planner.expand(call, body))
                 self._store(call, body, status, res)
                 res.calls_done += 1
+                if call.meta.get("shrunk"):
+                    # Learn a window cap only once a smaller window has actually worked (PLAN §6.3).
+                    repo.set_learned_cap(self.conn, call.endpoint, max(self._span(call), MIN_HALVE_DAYS),
+                                         self.clock())
                 if follow:
                     # Next search page first, so paging finishes before detail calls use up the budget.
                     pages = [c for c in follow if c.endpoint == "activities.search"]
@@ -171,7 +176,21 @@ class Runner:
                 res.status, stop_reason = "failed", str(exc)
                 res.calls_failed += 1
                 break
-            except GarminError as exc:  # 429/5xx after retries, other HTTP errors: skip this slice, keep going
+            except ServerError as exc:
+                status = exc.status
+                halves = self._halve(call)
+                if halves:
+                    # Seen live: dailysummaries answers 500 to some full-year windows; smaller windows work.
+                    queue.extendleft(reversed(halves))
+                    res.calls_planned += len(halves) - 1
+                    log.warning("%s: %s, retrying with half windows", call.endpoint, exc)
+                else:
+                    if status is not None:
+                        repo.set_sync_state(self.conn, call.endpoint, call.key, status, self.clock())
+                    res.calls_failed += 1
+                    failed_tiers.add(call.tier)
+                    log.warning("call failed: %s", exc)
+            except GarminError as exc:  # 429 after retries, other HTTP errors: skip this slice, keep going
                 status = exc.status
                 if status is not None:
                     repo.set_sync_state(self.conn, call.endpoint, call.key, status, self.clock())
@@ -217,12 +236,11 @@ class Runner:
         if span <= MIN_HALVE_DAYS:
             return None
         half = math.ceil(span / 2)
-        repo.set_learned_cap(self.conn, call.endpoint, half, self.clock())
         mid = a + timedelta(days=half - 1)
         out = []
         for s, e in ((a, mid), (mid + timedelta(days=1), b)):
             out.append(Call(call.endpoint, range_key(s, e), {**call.args, "start": s.isoformat(), "end": e.isoformat()},
-                            call.tier, f"{call.endpoint} {s}..{e} (window shrunk)"))
+                            call.tier, f"{call.endpoint} {s}..{e} (window shrunk)", meta={"shrunk": True}))
         return out
 
     def _store(self, call: Call, body: object, status: int, res: RunResult) -> None:

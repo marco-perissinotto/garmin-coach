@@ -1,0 +1,2 @@
+- 2026-10-28 Long run on Saturdays, recovery ride on Sundays.
+- 2026-10-28 Prefer advice as: today's session, why, one thing to watch.

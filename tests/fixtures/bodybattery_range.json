@@ -1,0 +1,2 @@
+[{"date": "2026-10-27", "charged": 62, "drained": 70, "bodyBatteryValuesArray": [[1793055600000, "MEASURED", 30, 3.0]],
+  "bodyBatteryValueDescriptorDTOList": [{"bodyBatteryValueDescriptorIndex": 0, "bodyBatteryValueDescriptorKey": "timestamp"}]}]

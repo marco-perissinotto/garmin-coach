@@ -1,0 +1,5 @@
+{"calendarDate": "2026-10-27", "totalSteps": 14210, "totalDistanceMeters": 12005, "activeKilocalories": 1012.0, "totalKilocalories": 3120.0,
+ "restingHeartRate": 47, "lastSevenDaysAvgRestingHeartRate": 48, "minHeartRate": 44, "maxHeartRate": 171,
+ "averageStressLevel": 27, "highStressDuration": 1800, "mediumStressDuration": 3600, "lowStressDuration": 9000, "restStressDuration": 30000,
+ "bodyBatteryHighestValue": 88, "bodyBatteryLowestValue": 21, "bodyBatteryAtWakeTime": 85, "bodyBatteryChargedValue": 62, "bodyBatteryDrainedValue": 70,
+ "moderateIntensityMinutes": 20, "vigorousIntensityMinutes": 45, "averageSpo2": 96.0, "avgWakingRespirationValue": 14.0, "hydrationValueInML": null}

@@ -1,0 +1,13 @@
+# Copy to <app data>/config/athlete.yaml (see `garmin-coach doctor` for the exact path).
+name: ""
+birth_year: null
+sex: null            # M | F
+height_cm: null
+sports: [running, cycling]
+max_hr: null         # null = take from Garmin HR zones
+lthr: null
+ftp: null
+constraints: ["left knee: avoid >25 km long runs", "no training Tue evenings"]
+availability: {mon: 60, tue: 0, wed: 90, thu: 60, fri: 0, sat: 180, sun: 120}   # minutes
+advice_language: it
+units: metric

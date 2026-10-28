@@ -1,0 +1,118 @@
+"""`garmin-coach doctor`: environment checks without ever printing secrets (PLAN §6.1, Phase 0.5)."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
+
+from .garmin import endpoints as ep
+from .garmin.client import GarminClient, GarminError
+from .secrets import key_file_status, redact
+from .settings import CONFIG_FILES, KNOWLEDGE_FILES, Paths, Settings, is_cloud_synced
+from .store import db, repo
+
+KNOWLEDGE_TOKEN_WARN = 3000
+
+
+@dataclass
+class Check:
+    name: str
+    ok: bool
+    detail: str
+    critical: bool = True
+
+
+def _approx_tokens(text: str) -> int:
+    return len(text) // 4
+
+
+def run_doctor(paths: Paths, settings: Settings, *, repo_root: Path, online: bool = True,
+               client_factory: Callable[[], GarminClient] | None = None) -> tuple[list[Check], str]:
+    checks: list[Check] = []
+
+    checks.append(Check("repo location", not is_cloud_synced(repo_root),
+                        f"{repo_root}" + (" is inside a cloud-synced folder!" if is_cloud_synced(repo_root) else "")))
+    checks.append(Check("app data location", not is_cloud_synced(paths.home),
+                        f"{paths.home}" + (" is inside a cloud-synced folder!" if is_cloud_synced(paths.home) else "")))
+
+    key = key_file_status()
+    if key.source == "env":
+        checks.append(Check("API key", True, "from environment variable GARMIN_PERSONAL_API_KEY"))
+    elif not key.exists:
+        checks.append(Check("API key", False, f"key file not found at {key.path}"))
+    else:
+        detail = f"{key.path} (age {key.age_days} days)"
+        if key.permissions_ok is False:
+            checks.append(Check("API key", False, detail + " is readable by others: run chmod 600"))
+        else:
+            checks.append(Check("API key", True, detail + ("" if key.permissions_ok else "; permissions not checked on Windows")))
+        if is_cloud_synced(key.path):
+            checks.append(Check("API key location", False, "key file is inside a cloud-synced folder"))
+        if key.age_days is not None and key.age_days > 350:
+            checks.append(Check("API key age", False, "key is older than 350 days: rotate it soon", critical=False))
+
+    if online and key.source != "missing":
+        client = client_factory() if client_factory else GarminClient(budget=2, min_gap_s=0)
+        try:
+            body = client.fetch(ep.get("profile.settings"), {})
+            units = body.get("measurementSystem") if isinstance(body, dict) else None
+            tz = body.get("timeZone") if isinstance(body, dict) else None
+            checks.append(Check("token exchange + profile settings", True,
+                                f"OK (measurementSystem={units}, timeZone={tz})"))
+        except GarminError as exc:
+            checks.append(Check("token exchange + profile settings", False, redact(str(exc))))
+        finally:
+            client.close()
+    elif not online:
+        checks.append(Check("token exchange + profile settings", True, "skipped (--offline)", critical=False))
+
+    cache_empty = True
+    try:
+        conn = db.connect(paths.db)
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        cache_empty = repo.is_cache_empty(conn)
+        n_raw = conn.execute("SELECT COUNT(*) FROM raw_payload").fetchone()[0]
+        conn.close()
+        checks.append(Check("database", True,
+                            f"{paths.db} (schema v{version}, {mode}, {n_raw} raw payloads, "
+                            f"history {'NOT loaded yet' if cache_empty else 'loaded'})"))
+    except Exception as exc:  # noqa: BLE001
+        checks.append(Check("database", False, f"{paths.db}: {redact(str(exc))}"))
+
+    for name in CONFIG_FILES:
+        p = paths.config_dir / name
+        if not p.exists():
+            checks.append(Check(name, False, f"missing: copy config/{name.replace('.yaml', '.example.yaml')} to {p}"))
+            continue
+        try:
+            data = yaml.safe_load(p.read_text(encoding="utf-8"))
+            ok = isinstance(data, dict)
+            checks.append(Check(name, ok, str(p) if ok else f"{p} is not a YAML mapping"))
+        except yaml.YAMLError as exc:
+            checks.append(Check(name, False, f"{p}: invalid YAML ({exc.__class__.__name__})"))
+    for name in KNOWLEDGE_FILES:
+        p = paths.config_dir / name
+        if not p.exists():
+            checks.append(Check(name, False, f"missing: copy config/{name.replace('.md', '.example.md')} to {p}"))
+            continue
+        tokens = _approx_tokens(p.read_text(encoding="utf-8"))
+        if tokens > KNOWLEDGE_TOKEN_WARN:
+            checks.append(Check(name, True, f"{p} (~{tokens} tokens: above {KNOWLEDGE_TOKEN_WARN}, consider trimming)",
+                                critical=False))
+        else:
+            checks.append(Check(name, True, f"{p} (~{tokens} tokens)"))
+
+    failed = [c for c in checks if not c.ok and c.critical]
+    if any(c.name == "API key" for c in failed):
+        nxt = "create the key file, then run: garmin-coach doctor"
+    elif failed:
+        nxt = "fix the failed checks above, then run: garmin-coach doctor"
+    elif cache_empty:
+        nxt = "garmin-coach backfill   (or just start `garmin-coach mcp`: the history loads by itself)"
+    else:
+        nxt = "garmin-coach status"
+    return checks, nxt

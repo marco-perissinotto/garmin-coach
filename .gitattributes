@@ -1,0 +1,6 @@
+* text=auto eol=lf
+.githooks/* text eol=lf
+*.json text eol=lf
+*.png binary
+*.zip binary
+*.fit binary

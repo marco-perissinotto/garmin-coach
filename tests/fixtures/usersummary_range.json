@@ -1,0 +1,8 @@
+{"data": [{"calendarDate": "2026-10-26", "source": "garmin", "includesWellnessData": true,
+  "movement": {"steps": {"goal": 8000, "value": 9100, "distanceInMeters": 7300.0}},
+  "calories": {"burnedResting": 1800, "burnedActive": 640, "burnedTotal": 2440},
+  "heartRate": {"minValue": 46, "maxValue": 120, "restingValue": 48},
+  "intensityMinutes": {"goal": 150, "moderate": 10, "vigorous": 0},
+  "stress": {"avgLevel": 31, "highStressDurationInMillis": 2400000, "mediumStressDurationInMillis": 3000000, "lowStressDurationInMillis": 6000000, "restDurationInMillis": 28000000},
+  "bodyBattery": {"minValue": 25, "maxValue": 80, "chargedValue": 55, "drainedValue": 50},
+  "hydration": {"consumedInFractionalMl": 1500.0}, "respiration": {"avgValue": 15}, "pulseOx": {"avgValue": 95}}]}

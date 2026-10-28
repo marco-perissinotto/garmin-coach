@@ -1,0 +1,36 @@
+# --- Python / tooling
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# --- Data, caches, secrets: never in git (PLAN §0.8, §5.1)
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+.env
+.env.*
+*.key
+*api-key*
+*bearer-token*.json
+*.txt
+context/out/
+fit/
+*.fit
+*.zip
+refresh.lock
+logs/
+
+# --- Owner's personal config/knowledge (live in <app data>/config/, only *.example.* are versioned)
+athlete.yaml
+events.yaml
+settings.yaml
+history.md
+coach-notes.md

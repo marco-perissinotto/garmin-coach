@@ -1,0 +1,18 @@
+# Optional. Copy to <app data>/config/settings.yaml to override defaults; missing keys keep the default.
+sync:
+  ttl_minutes: {A: 60, B: 60, C: 1440, D: 1440, E: 10080}   # staleness thresholds per tier
+  min_call_gap_ms: 500
+  backfill_call_gap_ms: 1000     # slower pacing for the history load
+  sync_budget_calls: 30          # max calls in a synchronous on-demand refresh
+  sync_timeout_seconds: 25       # wall clock for a synchronous refresh; then serve what we have
+  background_budget_calls: 60
+  backfill_budget_calls: 400     # per backfill job; a job over budget ends 'partial' and resumes next start
+  backfill_days: 365
+  detail_days: 28                # activity detail/workouts fetched eagerly only for activities newer than this
+  startup_check: true            # set false to disable auto backfill/refresh at process start
+  lock_wait_seconds: 15
+  heartbeat_stale_seconds: 120   # a 'running' job without heartbeat for this long is treated as orphaned
+  cooldown_minutes: {rate_limit: 120, network_error: 10}
+  download_fit: false
+optional_endpoints: {nutrition: false, womens_health: false, hydration: true, spo2: true}
+context: {daily_token_budget: 2500, weekly_token_budget: 6000, recent_activities: 10}

@@ -1,0 +1,58 @@
+[project]
+name = "garmin-coach"
+version = "0.1.0"
+description = "Local read-only Garmin Personal API cache, athlete context and MCP server for AI coaching"
+readme = "README.md"
+authors = [
+    { name = "Marco Perissinotto" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "filelock>=4.2.4",
+    "garmin-connect-personal-api-python>=1.0.0",
+    "jinja2>=3.1.6",
+    "mcp>=2.3.0",
+    "platformdirs>=4.13.7",
+    "pydantic>=2.14.1",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+garmin-coach = "garmin_coach.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.24,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.0",
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+    "types-pyyaml>=6.0.12.20260906",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "BLE"]
+ignore = ["S101", "S608", "S311", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "BLE"]
+
+[tool.mypy]
+python_version = "3.12"
+packages = ["garmin_coach"]
+mypy_path = "src"
+ignore_missing_imports = true
+warn_unused_ignores = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

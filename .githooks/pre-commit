@@ -1,0 +1,8 @@
+#!/bin/sh
+# Refuse commits that contain something shaped like a Garmin Personal API key or a JWT (PLAN §0.1).
+# Enable once per clone with:  git config core.hooksPath .githooks
+pattern='GCDC''_[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+'
+if git diff --cached --no-color -U0 | grep -E -q "$pattern"; then
+  echo "pre-commit: staged changes contain an API key or JWT-looking string. Commit refused." >&2
+  exit 1
+fi

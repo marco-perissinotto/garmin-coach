@@ -1,0 +1,10 @@
+# Copy to <app data>/config/events.yaml.
+events:
+  - name: "Half marathon X"
+    date: 2027-03-14
+    sport: running
+    distance_km: 21.1
+    elevation_m: 150
+    goal: "sub 1:45"
+    priority: A        # A = main goal, B = important, C = training/test
+    notes: ""

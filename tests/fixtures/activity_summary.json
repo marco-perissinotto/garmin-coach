@@ -1,0 +1,6 @@
+{"activityId": 1000001, "activityName": "Morning Run", "startTimeLocal": "2026-10-27 07:05:00", "startTimeGMT": "2026-10-27 06:05:00",
+ "activityType": {"typeId": 1, "typeKey": "running", "parentTypeId": 17}, "distance": 10012.5, "duration": 2950.2, "movingDuration": 2930.0,
+ "elevationGain": 35.0, "averageSpeed": 3.39, "averageHR": 148.0, "maxHR": 171.0, "avgPower": 290.0, "normPower": 296.0,
+ "aerobicTrainingEffect": 3.4, "anaerobicTrainingEffect": 1.2, "trainingEffectLabel": "TEMPO", "activityTrainingLoad": 142.6,
+ "vO2MaxValue": 54.0, "lactateThresholdBpm": 166.0, "maxFtp": null, "calories": 690.0, "differenceBodyBattery": -14,
+ "maxAvgPower_60": 380, "hrTimeInZone_3": 1200.0}

@@ -1,0 +1,14 @@
+# Eventi in programma
+{% include "_header.md.j2" %}
+
+{% for e in p.events %}
+## {{ e.name }} – {{ e.date }} (priorità {{ e.priority or "–" }})
+- Sport {{ e.sport or "–" }}{% if e.distance_km %}, {{ e.distance_km }} km{% endif %}; obiettivo: {{ e.goal or "non definito" }}.
+- Mancano **{{ e.days }} giorni** ({{ e.weeks }} settimane): fase «{{ e.phase }}». {{ e.focus }}
+{% if e.notes %}
+- Note: {{ e.notes }}
+{% endif %}
+
+{% else %}
+Nessun evento in programma: aggiungili in events.yaml.
+{% endfor %}

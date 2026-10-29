@@ -1,0 +1,10 @@
+# Attività recenti
+{% include "_header.md.j2" %}
+
+| Data | Tipo | Durata | Distanza | Passo/vel. | FC media/max | Potenza | D+ | Carico | TE aer/anaer |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+{% for a in p.recent %}
+| {{ a.date }} {{ a.time }} | {{ a.type }}{% if a.name and a.name != a.date %} «{{ a.name }}»{% endif %} | {{ a.duration }} | {{ a.distance or "–" }} | {{ a.pace or "–" }} | {{ a.avg_hr or "–" }}/{{ a.max_hr or "–" }} | {{ a.power or "–" }} | {{ a.elev or "–" }} | {{ a.load if a.load is not none else "–" }} | {{ a.te or "–" }} |
+{% else %}
+| – | nessuna attività in cache | | | | | | | | |
+{% endfor %}

@@ -6,10 +6,34 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
-# Index = target version; MIGRATIONS[n] upgrades from version n to n+1. v0 -> v1 is the base schema.
-MIGRATIONS: list[str] = []
+# MIGRATIONS[n - 1] upgrades from version n to n + 1 (v0 -> v1 is the base schema).
+# The flag says whether the normalized layer must be rebuilt from raw_payload afterwards (offline, no network).
+MIGRATIONS: list[tuple[str, bool]] = [
+    (  # v1 -> v2 (Phase 2): per-activity fields needed by the metrics
+        """
+        ALTER TABLE activity ADD COLUMN parent INTEGER;
+        ALTER TABLE activity ADD COLUMN avg_run_cadence REAL;
+        ALTER TABLE activity ADD COLUMN avg_gap_speed_mps REAL;
+        ALTER TABLE activity ADD COLUMN hr_z1_s REAL;
+        ALTER TABLE activity ADD COLUMN hr_z2_s REAL;
+        ALTER TABLE activity ADD COLUMN hr_z3_s REAL;
+        ALTER TABLE activity ADD COLUMN hr_z4_s REAL;
+        ALTER TABLE activity ADD COLUMN hr_z5_s REAL;
+        ALTER TABLE activity ADD COLUMN pwr_5s INTEGER;
+        ALTER TABLE activity ADD COLUMN pwr_60s INTEGER;
+        ALTER TABLE activity ADD COLUMN pwr_300s INTEGER;
+        ALTER TABLE activity ADD COLUMN pwr_1200s INTEGER;
+        ALTER TABLE activity ADD COLUMN pwr_3600s INTEGER;
+        """,
+        True,
+    ),
+    (  # v2 -> v3 (Phase 2): fingerprint of the data the derived layer was computed from
+        "CREATE TABLE IF NOT EXISTS derived_state (key TEXT PRIMARY KEY, value TEXT);",
+        False,
+    ),
+]
 
 
 def _schema_sql() -> str:
@@ -33,10 +57,18 @@ def connect(path: Path | str, *, timeout: float = 30.0) -> sqlite3.Connection:
 
 def migrate(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
+    rebuild = False
     if version == 0:
         conn.executescript(_schema_sql())
         version = 1
     while version < SCHEMA_VERSION:
-        conn.executescript(MIGRATIONS[version - 1])
+        sql, needs_rebuild = MIGRATIONS[version - 1]
+        conn.executescript(sql)
+        rebuild = rebuild or needs_rebuild
         version += 1
+        conn.execute(f"PRAGMA user_version = {version}")
     conn.execute(f"PRAGMA user_version = {version}")
+    if rebuild and conn.execute("SELECT 1 FROM raw_payload LIMIT 1").fetchone():
+        from ..sync import normalize  # lazy: store must not import sync at module load
+
+        normalize.rebuild_all(conn)

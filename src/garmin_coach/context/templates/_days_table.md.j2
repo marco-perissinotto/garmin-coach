@@ -1,0 +1,5 @@
+| Giorno | Carico | Sonno | HRV | FC riposo | BB sveglia | Stress | Attività |
+|---|---:|---|---:|---:|---:|---:|---|
+{% for d in days %}
+| {{ d.day }} | {{ d.load if d.load is not none else "–" }} | {% if d.sleep_h %}{{ d.sleep_h }} h ({{ d.sleep_score or "–" }}){% else %}–{% endif %} | {{ d.hrv or "–" }} | {{ d.rhr or "–" }} | {{ d.bb if d.bb is not none else "–" }} | {{ d.stress if d.stress is not none else "–" }} | {{ d.acts }} |
+{% endfor %}

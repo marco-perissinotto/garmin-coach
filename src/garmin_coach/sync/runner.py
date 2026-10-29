@@ -17,7 +17,8 @@ from datetime import datetime, timedelta
 from ..clock import Clock, system_clock
 from ..garmin import endpoints as ep
 from ..garmin.chunking import parse_range_key, range_key
-from ..garmin.client import (
+from ..garmin.endpoints import Tier
+from ..garmin.errors import (
     AuthError,
     BadRequestError,
     BudgetExhaustedError,
@@ -29,7 +30,6 @@ from ..garmin.client import (
     NotFoundError,
     ServerError,
 )
-from ..garmin.endpoints import Tier
 from ..secrets import redact
 from ..settings import Settings
 from ..store import repo
@@ -78,7 +78,10 @@ class Runner:
         clock: Clock = system_clock,
         progress: Callable[[Progress], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        on_finished: Callable[[sqlite3.Connection], None] | None = None,
     ) -> None:
+        """``on_finished`` runs after a run that stored new payloads (metrics + context packs, PLAN §6.2)."""
+        self.on_finished = on_finished
         self.conn = conn
         self.settings = settings
         self.fetcher = fetcher
@@ -219,6 +222,8 @@ class Runner:
             repo.mark_tier_complete(self.conn, (t.value for t in done), self.clock())
         if res.error:
             repo.mark_tier_error(self.conn, (t.value for t in tiers - res.tiers_completed), res.error, self.clock())
+        if res.raw_ids and self.on_finished is not None:
+            self.on_finished(self.conn)
         report("finished")
         return res
 

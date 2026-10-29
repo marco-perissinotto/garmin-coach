@@ -1,0 +1,9 @@
+_Generato {{ p.generated }} · dati fino al {{ p.data_through or "–" }} · età cache: A {{ p.cache.A }} · B {{ p.cache.B }} · C {{ p.cache.C }} · D {{ p.cache.D }} · E {{ p.cache.E }}_
+{% if p.stale_reason %}
+
+> ⚠ Dati serviti dalla cache non aggiornata: {{ p.stale_reason }}
+{% endif %}
+{% if p.history_note %}
+
+> ⚠ {{ p.history_note }}: le tendenze di lungo periodo sono incomplete.
+{% endif %}

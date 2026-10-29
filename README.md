@@ -41,7 +41,7 @@ Tre idee alla base:
 |---|---|---|
 | 0 | Sicurezza, struttura del progetto, comando `doctor` | fatta |
 | 1 | Sincronizzazione, cache, caricamento dello storico, aggiornamento su richiesta, lavori in background | fatta |
-| 2 | Metriche (carico, forma, prontezza) e "context pack" per il coach | da fare |
+| 2 | Metriche (carico, forma, prontezza) e "context pack" per il coach | fatta |
 | 3 | Server MCP completo (tool, risorse, prompt), integrazione con Claude Desktop e Claude Code | da fare |
 | 4 | Secondo computer (Mac), avviso di scadenza della chiave, rifiniture | da fare |
 | 5–6 | Opzionali: file FIT, nutrizione, dashboard locale | da fare |
@@ -113,9 +113,29 @@ aggiorna per conto suo.
 | `garmin-coach normalize --all` | Ricostruisce le tabelle dai dati grezzi salvati, senza contattare Garmin |
 | `garmin-coach status [--watch] [--json]` | Età della cache per livello, storico caricato?, lavoro in corso con avanzamento e stima di fine |
 | `garmin-coach jobs list \| show <id> \| cancel <id> \| prune` | Storico e controllo dei lavori di sincronizzazione |
+| `garmin-coach context show [daily\|weekly\|events\|athlete\|recent\|instructions] [--offline]` | Stampa un pack pronto da incollare in una chat; senza `--offline` aggiorna prima i dati che servono |
+| `garmin-coach context build [--offline]` | Ricalcola le metriche e riscrive tutti i pack in `<dati>/context/` |
+| `garmin-coach context export --zip [--offline]` | Aggiorna tutto e impacchetta i pack in uno zip (per esempio per un Project di ChatGPT) |
 | `garmin-coach mcp` | Avvia il server MCP per Claude. Se la cache è vuota, fa partire da solo il caricamento dello storico |
 
 Codici di uscita di `backfill` e `sync`: 0 completato, 2 parziale (riprende al prossimo avvio), 1 fallito.
+
+## Cosa legge il coach
+
+Dopo ogni sincronizzazione il programma ricalcola le metriche e scrive in `<dati>/context/` dei "context pack" in
+Markdown (più `context.json` con gli stessi dati strutturati):
+
+| Pack | Contenuto |
+|---|---|
+| `daily-brief.md` | Oggi: segnali di attenzione, prontezza (euristica) con motivazioni, sonno, HRV, FC a riposo, Body Battery, attività di oggi e ieri, carico (ATL/CTL/TSB/ACWR), prossime gare |
+| `athlete.md` | Profilo, soglie e zone, disponibilità, vincoli, più `history.md` e `coach-notes.md` per intero |
+| `events.md` | Gare in programma con giorni mancanti e fase di preparazione |
+| `last-7d.md`, `last-28d.md` | Tabelle giorno per giorno, settimane per sport, tempo in zona, indicatori di efficienza, potenze di picco, peso |
+| `activities-recent.md` | Le ultime attività con i numeri principali |
+| `coach-instructions.md` | Istruzioni brevi e senza dati personali da usare come istruzioni di un Project di Claude |
+
+Le formule e i loro limiti sono in [docs/METRICS.md](docs/METRICS.md). Il VO2max non è disponibile con la Personal
+API: al suo posto ci sono indicatori di efficienza (metri per battito in corsa, watt per battito in bici).
 
 ## Come si aggiorna la cache
 

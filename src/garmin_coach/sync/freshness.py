@@ -20,8 +20,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ..clock import Clock, system_clock
-from ..garmin.client import Fetcher
 from ..garmin.endpoints import BACKGROUND_TIERS, SYNC_TIERS, Tier
+from ..garmin.errors import Fetcher
 from ..secrets import redact
 from ..settings import Paths, Settings
 from ..store import repo
@@ -70,6 +70,7 @@ class FreshnessGate:
         jobs: JobManager | None = None,
         clock: Clock = system_clock,
         background: bool = True,
+        post_run: Callable[[sqlite3.Connection], None] | None = None,
     ) -> None:
         """``background=False`` (CLI): C/D/E are refreshed inline because the process may exit soon."""
         self.paths = paths
@@ -79,6 +80,7 @@ class FreshnessGate:
         self.jobs = jobs
         self.clock = clock
         self.background = background
+        self.post_run = post_run
         self._bg_guard = threading.Lock()
         self._bg_job: int | None = None
 
@@ -205,7 +207,8 @@ class FreshnessGate:
         fetcher = self.fetcher_factory(budget, timeout)
         try:
             force = max_age is not None and all(max_age.get(t, timedelta(1)) <= timedelta(0) for t in tiers)
-            res = Runner(self.conn, self.settings, fetcher, clock=self.clock).run(tiers, force=force,
+            res = Runner(self.conn, self.settings, fetcher, clock=self.clock,
+                         on_finished=self.post_run).run(tiers, force=force,
                                                                                   max_age=max_age)
         finally:
             fetcher.close()

@@ -1,0 +1,70 @@
+# Brief del giorno – {{ p.today }}
+{% include "_header.md.j2" %}
+
+## Segnali
+{% for f in p.flags %}
+- {{ f }}
+{% else %}
+- Nessun segnale di attenzione dai dati.
+{% endfor %}
+
+## Prontezza (euristica, non è la Training Readiness di Garmin)
+{% if p.readiness and p.readiness.score is not none %}
+**{{ p.readiness.score }}/100 – {{ p.readiness.label }}.** {{ p.readiness.reasons | join("; ") }}.{% if p.readiness.missing %} Mancano: {{ p.readiness.missing | join(", ") }}.{% endif %}
+
+{% else %}
+Nessun dato sufficiente per calcolarla oggi.
+{% endif %}
+
+## Sonno (notte appena passata)
+{% if p.sleep %}
+{{ p.sleep.duration }} ({{ p.sleep.start }}–{{ p.sleep.end }}), punteggio {{ p.sleep.score or "–" }}{% if p.sleep.quality %} ({{ p.sleep.quality | lower }}){% endif %}. Profondo {{ p.sleep.deep }}, REM {{ p.sleep.rem }}, leggero {{ p.sleep.light }}, sveglio {{ p.sleep.awake }}{% if p.sleep.awake_count %} ({{ p.sleep.awake_count }} risvegli){% endif %}. FC media {{ p.sleep.avg_hr or "–" }}.{% if p.sleep.need %} Fabbisogno {{ p.sleep.need }}.{% endif %} Media 7 notti: punteggio {{ p.sleep.avg7_score or "–" }}, {{ p.sleep.avg7_hours or "–" }} h.
+{% else %}
+Nessun dato di sonno per stanotte.
+{% endif %}
+
+## Recupero
+{% if p.hrv %}
+- HRV stanotte {{ p.hrv.last_night }} ms, media 7 giorni {{ p.hrv.weekly_avg }}, stato {{ p.hrv.status }}{% if p.hrv.low %}, intervallo normale {{ p.hrv.low }}–{{ p.hrv.high }}{% endif %}{% if p.hrv.slope is not none %}, tendenza 7 giorni {{ "%+.1f" | format(p.hrv.slope) }} ms/giorno{% endif %}.
+{% else %}
+- HRV: nessun dato per stanotte.
+{% endif %}
+{% if p.rhr %}
+- FC a riposo {{ p.rhr.today }} bpm (media 7 giorni {{ p.rhr.avg7 or "–" }}{% if p.rhr.delta is not none %}, {{ "%+d" | format(p.rhr.delta) }}{% endif %}).
+{% else %}
+- FC a riposo: nessun dato per oggi.
+{% endif %}
+{% if p.body_battery %}
+- Body Battery: al risveglio {{ p.body_battery.wake if p.body_battery.wake is not none else "–" }}, massimo {{ p.body_battery.high or "–" }}, minimo finora {{ p.body_battery.low or "–" }}.
+{% else %}
+- Body Battery: nessun dato per oggi.
+{% endif %}
+{% if p.stress_yesterday %}
+- Stress ieri: media {{ p.stress_yesterday.avg }}, alto {{ p.stress_yesterday.high }}, medio {{ p.stress_yesterday.medium }}{% if p.stress_yesterday.steps %}; passi {{ p.stress_yesterday.steps }}{% endif %}.
+{% else %}
+- Stress ieri: nessun dato.
+{% endif %}
+
+## Attività
+{% for label, acts in (("Oggi", p.activities_today), ("Ieri", p.activities_yesterday)) %}
+**{{ label }}:**{% if not acts %} nessuna attività registrata.{% endif %}
+
+{% for a in acts %}
+- {{ a.time }} {{ a.type }}{% if a.name and a.name != a.date %} «{{ a.name }}»{% endif %}: {{ a.duration }}{% if a.distance %}, {{ a.distance }}{% endif %}{% if a.pace %}, {{ a.pace }}{% endif %}{% if a.avg_hr %}, FC {{ a.avg_hr }}/{{ a.max_hr }}{% endif %}{% if a.power %}, {{ a.power }}{% endif %}{% if a.elev %}, D+ {{ a.elev }} m{% endif %}{% if a.load is not none %}, carico {{ a.load }}{% endif %}{% if a.te %}, TE {{ a.te }}{% endif %}.
+{% endfor %}
+
+{% endfor %}
+## Carico di allenamento
+{% if p.load %}
+ATL (7 g) {{ p.load.atl }} · CTL (42 g) {{ p.load.ctl }} · TSB {{ p.load.tsb if p.load.tsb is not none else "–" }}{% if p.load.form is not none %} (forma {{ "%+.0f%%" | format(p.load.form * 100) }}){% endif %} · ACWR {{ "%.2f" | format(p.load.acwr) if p.load.acwr is not none else "–" }}{% if p.load.monotony %} · monotonia {{ "%.1f" | format(p.load.monotony) }}{% endif %}.
+Carico ultimi 7 giorni {{ p.load.load7 }} contro una media settimanale di {{ p.load.week_avg28 }} nelle ultime 4 settimane; ieri {{ p.load.yesterday }}.
+{% else %}
+Nessun dato di carico.
+{% endif %}
+
+## Prossimi eventi
+{% for e in p.events[:3] %}
+- {{ e.name }} ({{ e.date }}, priorità {{ e.priority or "–" }}): tra {{ e.days }} giorni, fase «{{ e.phase }}»{% if e.goal %}, obiettivo {{ e.goal }}{% endif %}.
+{% else %}
+- Nessun evento in programma.
+{% endfor %}

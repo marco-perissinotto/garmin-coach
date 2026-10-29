@@ -1,0 +1,26 @@
+# Ultime 4 settimane
+{% include "_header.md.j2" %}
+
+## Settimane
+| Settimana | Carico | Tempo | Dettaglio per sport |
+|---|---:|---:|---|
+{% for w in p.weeks %}
+| {{ w.label }} | {{ w.load }} | {{ w.time }} | {% for s in w.sports %}{{ s.sport }} {{ s.n }}× {{ s.time }}{% if s.distance != "–" %} {{ s.distance }}{% endif %}{% if not loop.last %}; {% endif %}{% else %}nessuna attività{% endfor %} |
+{% endfor %}
+
+## Giorno per giorno
+{% set days = p.days28 %}{% include "_days_table.md.j2" %}
+
+**Tempo nelle zone FC (28 giorni):** {% if p.zones28 %}{% for z, v in p.zones28.items() %}{{ z }} {{ v }}{% if not loop.last %} · {% endif %}{% endfor %}{% else %}nessun dato{% endif %}.
+
+## Indicatori di forma
+_Il VO2max non è disponibile tramite la Personal API: si usano indicatori di efficienza sulle sedute aerobiche stabili (≥ 30', FC sotto il 90% della soglia), all'aperto e al chiuso separati._
+{% for e in p.efficiency %}
+- {{ e.label }}: ultime 4 settimane {{ e.recent if e.recent is not none else "–" }} {{ e.unit }}, settimane 5–13 {{ e.previous if e.previous is not none else "–" }}{% if e.change is not none %} ({{ "%+.1f" | format(e.change) }}%){% endif %} [sedute {{ e.n }}]
+{% else %}
+- Nessuna seduta stabile utilizzabile negli ultimi 90 giorni.
+{% endfor %}
+
+**Migliori potenze 90 giorni (W):** {% if p.power_bests %}{% for where, b in p.power_bests.items() %}{{ "all'aperto" if where == "outdoor" else "indoor" }} {% for d, w in b.items() %}{{ d }} {{ w }}{% if not loop.last %}, {% endif %}{% endfor %}{% if not loop.last %}; {% endif %}{% endfor %}. Non confrontare direttamente indoor e all'aperto.{% else %}nessun dato di potenza.{% endif %}
+
+**Peso:** {{ p.athlete.weight or "nessun dato" }}.

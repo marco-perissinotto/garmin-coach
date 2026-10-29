@@ -1,0 +1,43 @@
+# Profilo atleta
+{% include "_header.md.j2" %}
+
+{% set a = p.athlete %}{% set t = p.thresholds %}
+- **Atleta:** {{ a.name or "–" }}{% if a.age %}, {{ a.age }} anni{% endif %}{% if a.sex %}, {{ a.sex }}{% endif %}{% if a.height_cm %}, {{ a.height_cm | int }} cm{% endif %}{% if a.weight %}, {{ a.weight }}{% endif %}.
+- **Sport:** {{ a.sports | join(", ") or "–" }}.
+- **FC massima:** {{ t.max_hr or "–" }} (dichiarata){% if t.max_hr_garmin %}, {{ t.max_hr_garmin }} usata da Garmin{% endif %}. **FC a riposo usata da Garmin:** {{ t.rest_hr_garmin or "–" }}.
+- **Soglia (LTHR):** {% if t.lthr_run or t.lthr_bike %}corsa {{ t.lthr_run or "–" }}, bici {{ t.lthr_bike or "–" }}, generale {{ t.lthr or "–" }} (zone Garmin){% else %}non nota{% endif %}{% if t.lthr_activity %}; ultima stima da attività {{ t.lthr_activity }} ({{ t.lthr_activity_date }}){% endif %}.
+- **FTP:** {{ t.ftp or "–" }} W{% if t.ftp_date %} ({{ t.ftp_date }}){% endif %}{% if t.ftp_garmin %}; Garmin {{ t.ftp_garmin }} W{% endif %}.
+{% if t.zones %}
+- **Zone FC Garmin** (limite inferiore Z1–Z5):
+{% for z in t.zones %}
+  - {{ z.sport }}: {{ z.floors | join(" / ") }} (metodo {{ z.method }}, massima {{ z.max }})
+{% endfor %}
+{% endif %}
+{% if a.availability %}
+- **Disponibilità indicativa (minuti):** {% for d, m in a.availability %}{{ d }} {{ m if m is not none else "?" }}{% if not loop.last %}, {% endif %}{% endfor %}.{% if a.availability_notes %} {{ a.availability_notes }}{% endif %}
+
+{% endif %}
+{% if a.constraints %}
+- **Vincoli:**
+{% for c in a.constraints %}
+  - {{ c }}
+{% endfor %}
+{% endif %}
+- **Lingua dei consigli:** {{ a.language }}; unità {{ a.units }}.
+
+---
+
+{% if p.history_md %}
+{{ p.history_md }}
+{% else %}
+_history.md non presente: storia atletica non disponibile._
+{% endif %}
+
+---
+
+# Regole di coaching concordate
+{% if p.coach_notes_md %}
+{{ p.coach_notes_md }}
+{% else %}
+_coach-notes.md non presente._
+{% endif %}

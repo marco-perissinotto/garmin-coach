@@ -120,3 +120,42 @@ learned on success (182 days) is used from then on. Unlike a 400, a 5xx never di
 Cache: 1 311 activities from 2016-05-30, daily data from 2020, sleep from 2022, HRV from 2023 (what the devices of the
 time recorded). Activity gap 2017–2020 is in Garmin, not a sync error. `weight.all` rejected again (body `{}`),
 so the account has no weigh-ins via this endpoint; still disabled for 7 days at a time.
+
+## Phase 2: metrics and context packs
+
+**D-040 No VO2max: efficiency proxies instead.** `vO2MaxValue` is empty on all 1 311 activities and no other
+Personal API payload carries VO2max. `metrics_daily.vo2max_run/bike` stay NULL; the packs show running metres per
+heartbeat and cycling watts per bpm on steady sessions, indoor and outdoor apart (`docs/METRICS.md`).
+
+**D-041 Schema v2/v3.** v2 adds per-activity fields needed by the metrics (HR time in zone, mean-maximal power,
+running cadence, grade-adjusted speed, multisport parent flag) and rebuilds the normalized layer from raw offline.
+v3 adds `derived_state` (fingerprint of the data `metrics_daily` was computed from). A migration can declare that it
+needs a rebuild; `db.connect` runs it.
+
+**D-042 TRIMP fallback calibrated to Garmin load.** Calibration factor = median of `load / TRIMP` on activities
+having both (1.09 on the owner's data); 113 days use the fallback (mostly 2021–2023 rides without load).
+
+**D-043 Readiness HRV penalty scales with consecutive nights below the normal range.** Garmin's HRV status follows
+the weekly average and stayed BALANCED in a synthetic case of 3 nights clearly below the range; a flat −0.25 still
+gave 75% of the HRV points. Now −0.25 after 1 night, −0.5 after 3+.
+
+**D-044 Packs are written in Italian** (the owner's `advice_language`), including Garmin enum labels (sleep quality,
+HRV status, training-effect label). `coach-instructions.md` has an English variant for other languages; the other
+templates are Italian only for now.
+
+**D-045 Metrics are cached, packs are rendered on demand.** A full recompute over ~3 800 days takes ~0.7 s, too close
+to the 1 s budget of `context show --offline`. Metrics are recomputed after every sync that stored data
+(post-run hook in Runner → `App.post_run`) and when the fingerprint changes; `show` renders from `metrics_daily`
+(~0.05 s). The hook never raises: a rendering failure cannot fail a sync.
+
+**D-046 Lazy imports for fast offline commands.** `requests`, the official client, the sync engine and `rich` are
+imported only when needed (`garmin/errors.py` split from `client.py`; `secrets.py` duplicates two constants of the
+official package, guarded by a test). `context show daily --offline`: median 0.86 s wall clock over 15 runs on the
+Windows laptop (rendering ~0.05 s; the rest is Python start-up; occasional antivirus spikes up to ~4 s).
+
+**D-047 Flags beyond the plan.** The brief also flags: yesterday's load ≥ 2× the chronic daily load (the readiness
+score barely moves after a single hard day), no sleep data for last night (watch not synced), events within 7 days,
+and problems loading the owner's files.
+
+**D-048 Daily HR maximum is not used.** Garmin's daily HR maximum can be an
+optical artefact (174 bpm on a rest morning, 2026-10-29), so `daily.hr_max` is not used by any metric or pack.

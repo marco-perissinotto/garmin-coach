@@ -1,4 +1,4 @@
--- garmin-coach cache schema v1 (PLAN §5.2). Deviations from the plan are logged in docs/DECISIONS.md.
+-- garmin-coach cache schema v1 (PLAN §5.2); later versions are migrations in db.py. Deviations from the plan are logged in docs/DECISIONS.md.
 
 -- raw layer: every successful response, verbatim. Never deleted. Lets us re-normalize without re-polling.
 CREATE TABLE IF NOT EXISTS raw_payload (

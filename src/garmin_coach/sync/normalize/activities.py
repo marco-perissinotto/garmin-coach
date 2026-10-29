@@ -13,7 +13,8 @@ COLUMNS = (
     "activity_id", "start_local", "start_gmt", "type_key", "name", "distance_m", "duration_s", "moving_s",
     "elev_gain_m", "avg_hr", "max_hr", "avg_power", "norm_power", "aerobic_te", "anaerobic_te", "te_label",
     "training_load", "vo2max", "lthr", "ftp", "avg_speed_mps", "calories", "body_battery_diff", "summary_hash",
-    "updated_at",
+    "updated_at", "parent", "avg_run_cadence", "avg_gap_speed_mps", "hr_z1_s", "hr_z2_s", "hr_z3_s", "hr_z4_s",
+    "hr_z5_s", "pwr_5s", "pwr_60s", "pwr_300s", "pwr_1200s", "pwr_3600s",
 )
 
 
@@ -48,6 +49,11 @@ def from_summary(a: dict[str, Any], seen_at: str) -> dict[str, Any]:
         "body_battery_diff": to_int(a.get("differenceBodyBattery")),
         "summary_hash": summary_hash(a),
         "updated_at": seen_at,
+        "parent": 1 if (a.get("isParent") or a.get("parent")) else 0,
+        "avg_run_cadence": to_float(a.get("averageRunningCadenceInStepsPerMinute")),
+        "avg_gap_speed_mps": to_float(a.get("avgGradeAdjustedSpeed")),
+        **{f"hr_z{i}_s": to_float(a.get(f"hrTimeInZone_{i}")) for i in range(1, 6)},
+        **{f"pwr_{s}s": to_int(a.get(f"maxAvgPower_{s}")) for s in (5, 60, 300, 1200, 3600)},
     }
 
 

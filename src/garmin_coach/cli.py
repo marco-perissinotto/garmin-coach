@@ -12,24 +12,67 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-from rich.console import Console
-from rich.live import Live
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
-from rich.table import Table
 
 from .app import App
 from .garmin.endpoints import REFRESH_TIERS, Tier
 from .secrets import setup_logging
-from .status import build_status
-from .sync import jobs as jobs_mod
-from .sync import normalize as normalize_mod
-from .sync.startup import startup_check
+
+
+class _LazyModule:
+    """Import the sync engine on first use: offline commands (context show --offline) never need it."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def __getattr__(self, attr: str) -> Any:
+        import importlib
+
+        return getattr(importlib.import_module(self._name), attr)
+
+
+jobs_mod: Any = _LazyModule("garmin_coach.sync.jobs")
+normalize_mod: Any = _LazyModule("garmin_coach.sync.normalize")
+
+
+def startup_check(*args: Any, **kwargs: Any) -> Any:
+    from .sync.startup import startup_check as check
+
+    return check(*args, **kwargs)
+
+
+def build_status(*args: Any, **kwargs: Any) -> Any:
+    from .status import build_status as build
+
+    return build(*args, **kwargs)
 
 app_cli = typer.Typer(no_args_is_help=True, add_completion=False, help="Local Garmin cache + coaching context.")
 jobs_cli = typer.Typer(no_args_is_help=True, help="Job history and control.")
 app_cli.add_typer(jobs_cli, name="jobs")
-console = Console()
-err = Console(stderr=True)
+context_cli = typer.Typer(no_args_is_help=True, help="Context packs for the coach (Markdown + JSON).")
+app_cli.add_typer(context_cli, name="context")
+
+
+class _LazyConsole:
+    """rich is imported on first use only: `context show --offline` must start fast (PLAN Phase 2 acceptance)."""
+
+    def __init__(self, stderr: bool) -> None:
+        self._stderr = stderr
+        self._console: Any = None
+
+    @property
+    def real(self) -> Any:
+        if self._console is None:
+            from rich.console import Console
+
+            self._console = Console(stderr=self._stderr)
+        return self._console
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.real, name)
+
+
+console = _LazyConsole(stderr=False)
+err = _LazyConsole(stderr=True)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -69,8 +112,10 @@ def _wait_job(a: App, job_id: int, *, quiet: bool = False) -> dict[str, Any]:
             time.sleep(0.5)
             job = jobs_mod.get_job(conn, job_id) or {}
         return job
+    from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
+
     with Progress(TextColumn("[bold]#{task.fields[jid]} {task.fields[kind]}"), BarColumn(), MofNCompleteColumn(),
-                  TimeElapsedColumn(), TextColumn("{task.description}"), console=err, transient=False) as bar:
+                  TimeElapsedColumn(), TextColumn("{task.description}"), console=err.real, transient=False) as bar:
         task = bar.add_task("queued", total=None, jid=job_id, kind=job.get("kind", ""))
         while True:
             job = jobs_mod.get_job(conn, job_id) or {}
@@ -182,7 +227,9 @@ def normalize(all_: Annotated[bool, typer.Option("--all", help="Rebuild every no
               ", ".join(f"{k}={v}" for k, v in counts.items()))
 
 
-def _status_table(s: dict[str, Any]) -> Table:
+def _status_table(s: dict[str, Any]) -> Any:
+    from rich.table import Table
+
     t = Table(title="garmin-coach cache", show_lines=False)
     for col in ("tier", "age", "ttl", "state", "note"):
         t.add_column(col)
@@ -222,7 +269,9 @@ def status(
         console.print(_status_table(s))
         return
     try:
-        with Live(_status_table(s), console=console, refresh_per_second=1) as live:
+        from rich.live import Live
+
+        with Live(_status_table(s), console=console.real, refresh_per_second=1) as live:
             seen_job = s.get("job") is not None
             while True:
                 time.sleep(2)
@@ -237,6 +286,8 @@ def status(
 
 @jobs_cli.command("list")
 def jobs_list(limit: int = 20) -> None:
+    from rich.table import Table
+
     a = _app()
     t = Table()
     for col in ("id", "kind", "trigger", "tiers", "status", "calls", "failed", "queued", "finished", "error"):
@@ -267,6 +318,80 @@ def jobs_cancel(job_id: int) -> None:
 def jobs_prune(keep: int = 50) -> None:
     a = _app()
     err.print(f"deleted {jobs_mod.prune_jobs(a.conn, keep)} job rows")
+
+
+# -- context packs (PLAN §8) --------------------------------------------------------------------------------------
+# Tiers each pack needs (PLAN §6.5 table). In the CLI everything is refreshed synchronously.
+_PACK_TIERS: dict[str, set[Tier]] = {
+    "daily": {Tier.A, Tier.B, Tier.C, Tier.D},
+    "weekly": {Tier.C}, "7d": {Tier.C}, "28d": {Tier.C},
+    "athlete": {Tier.E, Tier.C}, "recent": {Tier.A}, "events": set(), "instructions": set(),
+}
+
+
+def _fresh(a: App, tiers: set[Tier], max_age: int | None) -> Any:
+    """Startup check + synchronous freshness gate. Returns the Freshness object (or None when nothing to check)."""
+    if not tiers:
+        return None
+    _run_startup_then(a, refresh_stale=False)
+    from datetime import timedelta
+
+    ma = None if max_age is None else {t: timedelta(minutes=max_age) for t in tiers}
+    return a.gate(background=False).ensure_fresh(tiers, ma, trigger="cli")
+
+
+def _utf8_stdout() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles default to cp1252
+
+
+@context_cli.command("show")
+def context_show(
+    what: Annotated[str, typer.Argument(help="daily | weekly | 7d | 28d | events | athlete | recent | instructions")] = "daily",
+    offline: Annotated[bool, typer.Option("--offline", help="Never contact Garmin: render from the cache.")] = False,
+    max_age: Annotated[int | None, typer.Option("--max-age", help="Override the TTL in minutes (0 = force).")] = None,
+) -> None:
+    """Print a pack, ready to paste into a chat. Refreshes the tiers it needs first unless --offline."""
+    from .context import render
+
+    if what not in render.ALIASES:
+        raise typer.BadParameter(f"choose one of: {', '.join(render.ALIASES)}")
+    a = _app()
+    fr = None if offline else _fresh(a, _PACK_TIERS[what], max_age)
+    _, texts = render.build_and_render(a.conn, a.paths, a.settings, clock=a.clock, freshness=fr,
+                                       names=render.ALIASES[what], write=False)
+    _utf8_stdout()
+    print("\n".join(texts.values()), end="")
+
+
+@context_cli.command("build")
+def context_build(
+    offline: Annotated[bool, typer.Option("--offline", help="Never contact Garmin: build from the cache.")] = False,
+) -> None:
+    """Recompute metrics and write every pack + context.json to <app data>/context/."""
+    from .context import render
+
+    a = _app()
+    fr = None if offline else _fresh(a, set(REFRESH_TIERS), None)
+    _, texts = render.build_and_render(a.conn, a.paths, a.settings, clock=a.clock, freshness=fr)
+    for name, tokens in render.token_report(texts).items():
+        err.print(f"{name}.md  ~{tokens} token")
+    err.print(f"written to {a.paths.context_dir}")
+
+
+@context_cli.command("export")
+def context_export(
+    zip_: Annotated[bool, typer.Option("--zip", help="Bundle the packs into a zip (e.g. for a ChatGPT Project).")] = True,
+    offline: Annotated[bool, typer.Option("--offline", help="Never contact Garmin: export from the cache.")] = False,
+) -> None:
+    """Refresh everything (unless --offline), rebuild the packs and bundle them."""
+    from .context import render
+
+    a = _app()
+    fr = None if offline else _fresh(a, set(REFRESH_TIERS), None)
+    render.build_and_render(a.conn, a.paths, a.settings, clock=a.clock, freshness=fr)
+    target = render.export_zip(a.paths, a.clock) if zip_ else a.paths.context_dir
+    err.print(f"exported: {target}")
 
 
 @app_cli.command()

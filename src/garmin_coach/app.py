@@ -5,13 +5,16 @@ from __future__ import annotations
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from .clock import Clock, system_clock
-from .garmin.client import Fetcher, GarminClient
+from .garmin.errors import Fetcher
 from .settings import Paths, Settings, get_paths, load_settings
 from .store import db
-from .sync.freshness import FreshnessGate
-from .sync.jobs import JobManager
+
+if TYPE_CHECKING:  # the sync engine is imported lazily: offline commands never need it
+    from .sync.freshness import FreshnessGate
+    from .sync.jobs import JobManager
 
 
 @dataclass
@@ -37,6 +40,8 @@ class App:
         return self._conn
 
     def fetcher(self, budget: int, timeout_s: float | None = None, gap_ms: int | None = None) -> Fetcher:
+        from .garmin.client import GarminClient  # lazy: requests + official client only when Garmin is called
+
         deadline = time.monotonic() + timeout_s if timeout_s else None
         gap = self.settings.sync.min_call_gap_ms if gap_ms is None else gap_ms
         return GarminClient(budget=budget, min_gap_s=gap / 1000, deadline=deadline)
@@ -50,10 +55,20 @@ class App:
     @property
     def jobs(self) -> JobManager:
         if self._jobs is None:
+            from .sync.jobs import JobManager
+
             self._jobs = JobManager(self.paths, self.settings, conn_factory=self.connect,
-                                    fetcher_factory=self.job_fetcher, clock=self.clock)
+                                    fetcher_factory=self.job_fetcher, clock=self.clock, post_run=self.post_run)
         return self._jobs
 
     def gate(self, *, background: bool) -> FreshnessGate:
+        from .sync.freshness import FreshnessGate
+
         return FreshnessGate(self.paths, self.settings, self.conn, fetcher_factory=self.fetcher, jobs=self.jobs,
-                             clock=self.clock, background=background)
+                             clock=self.clock, background=background, post_run=self.post_run)
+
+    def post_run(self, conn: sqlite3.Connection) -> None:
+        """After a refresh stored new data: recompute metrics and re-render the packs (never raises)."""
+        from .context.render import after_sync  # lazy: keeps MCP boot light
+
+        after_sync(conn, self.paths, self.settings, self.clock)

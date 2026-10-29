@@ -1,0 +1,22 @@
+# Ultimi 7 giorni
+{% include "_header.md.j2" %}
+
+{% set days = p.days7 %}{% include "_days_table.md.j2" %}
+
+{% set w = p.weeks[0] if p.weeks else none %}
+{% if w %}
+## Settimana {{ w.label }}: carico {{ w.load }}, {{ w.time }}
+{% for s in w.sports %}
+- {{ s.sport }}: {{ s.n }} sedute, {{ s.time }}, {{ s.distance }}{% if s.elev %}, D+ {{ s.elev }} m{% endif %}
+{% else %}
+- Nessuna attività.
+{% endfor %}
+{% endif %}
+
+**Tempo nelle zone FC (7 giorni):** {% if p.zones7 %}{% for z, v in p.zones7.items() %}{{ z }} {{ v }}{% if not loop.last %} · {% endif %}{% endfor %}{% else %}nessun dato{% endif %}.
+
+{% if p.load %}
+**Carico:** 7 giorni {{ p.load.load7 }} (media settimanale 28 giorni {{ p.load.week_avg28 }}), ACWR {{ "%.2f" | format(p.load.acwr) if p.load.acwr is not none else "–" }}{% if p.load.monotony %}, monotonia {{ "%.1f" | format(p.load.monotony) }}{% endif %}, forma {{ "%+.0f%%" | format(p.load.form * 100) if p.load.form is not none else "–" }}.
+{% else %}
+**Carico:** nessun dato.
+{% endif %}

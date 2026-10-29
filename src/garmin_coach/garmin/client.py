@@ -10,13 +10,27 @@ import logging
 import random
 import time
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Any
 
 import requests
 from garmin_personal_api import GarminPersonalApiClient, GarminPersonalApiError, HttpError, PersonalApiAuthenticator
 
-from ..secrets import load_api_key, redact
+from ..secrets import load_api_key
 from .endpoints import Endpoint
+from .errors import (  # noqa: F401 - re-exported
+    AuthError,
+    BadRequestError,
+    BudgetExhaustedError,
+    CircuitOpenError,
+    DeadlineExceededError,
+    Fetcher,
+    GarminError,
+    KeyMissingError,
+    NetworkError,
+    NotFoundError,
+    RateLimitedError,
+    ServerError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -24,65 +38,6 @@ BACKOFF_BASE_S = 2.0
 MAX_TRIES = 5
 MAX_RETRY_AFTER_S = 120.0
 CIRCUIT_429_THRESHOLD = 3
-
-
-class GarminError(Exception):
-    status: int | None = None
-
-    def __init__(self, message: str, status: int | None = None) -> None:
-        super().__init__(redact(message))
-        if status is not None:
-            self.status = status
-
-
-class AuthError(GarminError):
-    status: int | None = 401
-
-
-class KeyMissingError(AuthError):
-    status = None
-
-
-class NotFoundError(GarminError):
-    status = 404
-
-
-class BadRequestError(GarminError):
-    status = 400
-
-
-class RateLimitedError(GarminError):
-    status = 429
-
-
-class CircuitOpenError(RateLimitedError):
-    """3 consecutive 429s in one run: abort and cool down (PLAN §6.4)."""
-
-
-class ServerError(GarminError):
-    pass
-
-
-class NetworkError(GarminError):
-    pass
-
-
-class BudgetExhaustedError(GarminError):
-    pass
-
-
-class DeadlineExceededError(GarminError):
-    pass
-
-
-class Fetcher(Protocol):
-    """What the runner needs. The real implementation is GarminClient; tests use a fake."""
-
-    calls_made: int
-
-    def fetch(self, endpoint: Endpoint, args: dict[str, Any]) -> Any: ...
-
-    def close(self) -> None: ...
 
 
 class GarminClient:

@@ -17,8 +17,8 @@ from datetime import timedelta
 from typing import Any
 
 from ..clock import Clock, iso, parse_iso, system_clock
-from ..garmin.client import Fetcher, GarminError
 from ..garmin.endpoints import Tier
+from ..garmin.errors import Fetcher, GarminError
 from ..secrets import redact
 from ..settings import Paths, Settings
 from .lock import RefreshLock
@@ -142,7 +142,9 @@ class JobManager:
         conn_factory: ConnFactory,
         fetcher_factory: FetcherFactory,
         clock: Clock = system_clock,
+        post_run: Callable[[sqlite3.Connection], None] | None = None,
     ) -> None:
+        self.post_run = post_run
         self.paths = paths
         self.settings = settings
         self.conn_factory = conn_factory
@@ -271,7 +273,7 @@ class JobManager:
             return
         try:
             res = Runner(conn, self.settings, fetcher, clock=self.clock, progress=progress,
-                         cancel_check=cancelled).run(tiers, force=bool(job["force"]))
+                         cancel_check=cancelled, on_finished=self.post_run).run(tiers, force=bool(job["force"]))
         finally:
             fetcher.close()
         finished = iso(self.clock())

@@ -8,9 +8,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from garmin_personal_api import GarminPersonalApiClient
+if TYPE_CHECKING:
+    from garmin_personal_api import GarminPersonalApiClient
 
 
 class Tier(StrEnum):
@@ -27,7 +28,7 @@ BACKGROUND_TIERS = frozenset({Tier.C, Tier.D, Tier.E})
 REFRESH_TIERS = (Tier.A, Tier.B, Tier.C, Tier.D, Tier.E)
 
 Kind = Literal["search", "activity", "day", "range", "static"]
-Invoke = Callable[[GarminPersonalApiClient, dict[str, Any]], Any]
+Invoke = Callable[["GarminPersonalApiClient", dict[str, Any]], Any]
 
 ACTIVITY_SEARCH_PATH = "/activitylist-service/activities/search/activities"
 

@@ -12,9 +12,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from garmin_personal_api import DEFAULT_API_KEY_FILE, resolve_api_key
-from garmin_personal_api.constants import DEFAULT_API_KEY_ENV_VAR
-
 from .settings import Paths
 
 _KEY_PREFIX = "GCDC" + "_"  # split so the literal never appears in the repo
@@ -78,12 +75,20 @@ def setup_logging(paths: Paths, *, console_level: int = logging.WARNING) -> None
     _configured = True
 
 
+# Same values as garmin_personal_api.constants; importing that package pulls in requests, which the offline
+# commands (context show --offline, status) do not need.
+DEFAULT_API_KEY_FILE = "~/.config/garmin/connect-personal-api-key"
+DEFAULT_API_KEY_ENV_VAR = "GARMIN_PERSONAL_API_KEY"
+
+
 def key_file_path() -> Path:
     return Path(DEFAULT_API_KEY_FILE).expanduser()
 
 
 def load_api_key() -> str:
     """Env var GARMIN_PERSONAL_API_KEY, else the official default key file. Raises GarminPersonalApiError."""
+    from garmin_personal_api import resolve_api_key
+
     return resolve_api_key()
 
 

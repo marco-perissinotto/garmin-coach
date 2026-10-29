@@ -172,3 +172,13 @@ def test_missing_key_is_typed(settings_ep: ep.Endpoint) -> None:
 def test_only_documented_endpoints_and_get_only() -> None:
     assert len(ep.ENDPOINTS) == 26
     assert all(e.path.startswith("/") for e in ep.ENDPOINTS.values())
+
+
+def test_offline_constants_match_official_client() -> None:
+    """secrets.py duplicates two constants to avoid importing requests on offline paths: keep them in sync."""
+    from garmin_personal_api import constants
+
+    from garmin_coach import secrets
+
+    assert secrets.DEFAULT_API_KEY_FILE == str(constants.DEFAULT_API_KEY_FILE).replace("\\", "/")
+    assert secrets.DEFAULT_API_KEY_ENV_VAR == constants.DEFAULT_API_KEY_ENV_VAR

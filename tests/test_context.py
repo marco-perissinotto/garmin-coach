@@ -19,7 +19,7 @@ from garmin_coach.sync.runner import Runner
 GOLDEN = Path(__file__).parent / "golden"
 
 ATHLETE = """name: "Test Athlete"
-birth_year: 1984-10-22
+birth_year: 1980-01-01
 sex: M
 height_cm: 175
 weight_kg: 70
@@ -57,7 +57,7 @@ def test_inputs_loader_tolerates_dates_and_missing(paths: Paths) -> None:
     assert len(inp.problems) == 4 and inp.athlete.advice_language == "it"
     write_inputs(paths)
     inp = load_inputs(paths)
-    assert inp.problems == [] and inp.athlete.birth_year == 1984 and [e.name for e in inp.events] == [
+    assert inp.problems == [] and inp.athlete.birth_year == 1980 and [e.name for e in inp.events] == [
         "Test Half", "Test 70.3"]
     (paths.config_dir / "events.yaml").write_text("events: [{name: broken}]", encoding="utf-8")
     assert any("evento #1" in p for p in load_inputs(paths).problems)

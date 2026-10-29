@@ -60,7 +60,7 @@ motivazioni, in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ```sh
 # 1. clona il repo in una cartella NON sincronizzata con OneDrive/iCloud (niente Desktop o Documenti sincronizzati)
-git clone https://github.com/marco-perissinotto/garmin-coach.git
+git clone <url-del-repo> garmin-coach
 cd garmin-coach
 git config core.hooksPath .githooks      # blocca i commit che contengono una chiave o un token
 

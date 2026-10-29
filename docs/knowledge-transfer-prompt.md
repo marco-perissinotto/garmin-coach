@@ -1,4 +1,4 @@
-# Prompt di passaggio di consegne (da incollare nella chat Copilot/ChatGPT esistente)
+# Prompt di passaggio di consegne (da incollare nella chat in cui ricevevi i consigli finora)
 
 Risultato atteso: quattro blocchi di codice da salvare come `athlete.yaml`, `events.yaml`, `history.md`, `coach-notes.md`
 nella cartella `<app data>/config/` di garmin-coach (vedi PLAN.md §5.1 e §11).

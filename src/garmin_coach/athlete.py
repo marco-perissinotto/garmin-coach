@@ -43,7 +43,7 @@ class Athlete(_Model):
     @field_validator("birth_year", mode="before")
     @classmethod
     def _year(cls, v: Any) -> Any:
-        # The owner wrote a full date (1984-10-22); accept a date, an ISO string or a plain year.
+        # A full birth date (YYYY-MM-DD) is common in the YAML; accept a date, an ISO string or a plain year.
         if isinstance(v, date | datetime):
             return v.year
         if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():

@@ -40,19 +40,18 @@
 
 ## 1. Current situation and decisions
 
-### 1.1 What exists today
-- The owner has a Garmin Connect **Personal API key** (created Oct 2026, 1-year expiry, read-only by design).
-- The owner asks a ChatGPT conversation for daily training advice by pasting screenshots manually.
-- Two machines: a corporate Windows 11 laptop (this one; Python 3.13, `uv`, git, Node present) and a personal Mac.
-- The working folder is `<corporate OneDrive>\Desktop\custom-garmin-dashboard` and contains `api-key.txt` and `links.txt`.
+### 1.1 Starting point
+- The owner has a Garmin Connect **Personal API key** (1-year expiry at most, read-only by design).
+- Until now, daily training advice came from a general-purpose chat assistant fed with pasted screenshots.
+- One or two machines: Windows 11 and/or macOS, with Python and `uv`.
 
-### 1.2 Security findings to fix first (Phase 0)
-- `api-key.txt` sits in a **corporate OneDrive folder**: it has already been synced to the employer's tenant and is
-  in OneDrive version history. **Recommendation: delete that key in Garmin Connect and create a new one**, then store the
-  new key only in `~/.config/garmin/connect-personal-api-key` (the official client's default path, mode `600`).
-- The project folder itself should **not** live under OneDrive, otherwise the SQLite cache with health data will be
-  synced to the corporate tenant. Move code to e.g. `C:\dev\garmin-coach` (Windows) / `~/dev/garmin-coach` (Mac).
-  Data goes to the per-OS app-data directory (§5.1).
+### 1.2 Security checks to do first (Phase 0)
+- If the key was ever saved in a **cloud-synced folder** (OneDrive, iCloud, Dropbox), it is in that service's version
+  history. **Delete that key in Garmin Connect and create a new one**, then store the new key only in
+  `~/.config/garmin/connect-personal-api-key` (the official client's default path, mode `600`).
+- The project folder itself should **not** live under a synced folder, otherwise the SQLite cache with health data is
+  synced too. Use e.g. `C:\dev\garmin-coach` (Windows) / `~/dev/garmin-coach` (Mac). Data goes to the per-OS
+  app-data directory (§5.1).
 
 ### 1.3 Technology decision
 | Concern | Decision | Why |
@@ -627,9 +626,9 @@ Rules for the implementer so the integration stays "quick":
 
 ## 10. Other assistants (decided 2026-10-28: Claude only)
 
-The owner is not the owner of the Microsoft 365 tenant available to them, so **Microsoft 365 Copilot is out of scope**:
-publishing an agent there would require admin approval and would store personal health data in the employer's tenant.
-The knowledge accumulated in the existing ChatGPT/Copilot conversations is transferred once into the service (§11.2)
+**Microsoft 365 Copilot is out of scope**: publishing an agent there needs the tenant administrator's approval and would
+store personal health data in an organisation's tenant. The knowledge accumulated in earlier chat conversations is
+transferred once into the service (§11.2)
 and Claude becomes the single coaching front-end through the local MCP server (§9.1).
 
 Kept as low-cost fallbacks, not as goals:

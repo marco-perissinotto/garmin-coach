@@ -16,7 +16,7 @@ on demand when `context` finds that the underlying tables changed (a fingerprint
   - `restHR` is that day's resting HR (else the one Garmin uses for the zones, else 50).
   - `maxHR` is `athlete.yaml max_hr`, else Garmin's zone max.
   - TRIMP is multiplied by a **calibration factor**: the median of `load / TRIMP` over activities that have both
-    (at least 10, clamped to 0.3–3), so the fallback speaks Garmin's units. On the owner's data: 1.09.
+    (at least 10, clamped to 0.3–3), so the fallback speaks Garmin's units.
 - **Per day:** sum over the day's activities (local start date). A day without activities is a real 0 (rest),
   not missing data. Multisport activities are a single row in the API (no children), so there is no double counting.
 - An activity without load and without heart rate (for example a strength session without a strap) counts 0.

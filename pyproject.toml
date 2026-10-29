@@ -3,6 +3,9 @@ name = "garmin-coach"
 version = "0.1.0"
 description = "Local read-only Garmin Personal API cache, athlete context and MCP server for AI coaching"
 readme = "README.md"
+authors = [
+    { name = "Marco Perissinotto" }
+]
 requires-python = ">=3.12"
 dependencies = [
     "filelock>=4.2.4",

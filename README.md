@@ -198,5 +198,7 @@ GARMIN_COACH_LIVE=1 uv run pytest tests/test_live.py     # unico test dal vivo (
 uv run ruff check src tests && uv run mypy               # stile e tipi
 ```
 
+Per contribuire: [CONTRIBUTING.md](CONTRIBUTING.md); per segnalare un problema di sicurezza: [SECURITY.md](SECURITY.md).
+
 Il progetto è a uso personale: la Personal API di Garmin è pensata per un solo utente e non per applicazioni
 multiutente.

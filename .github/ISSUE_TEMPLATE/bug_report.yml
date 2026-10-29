@@ -1,0 +1,34 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste your API key, a bearer token or real health data here.** `garmin-coach status --json` and the
+        log are redacted, but check them before pasting. For security problems use SECURITY.md instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Commands or MCP tool calls, in order.
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant output
+      description: Error message, `garmin-coach doctor --offline` output, or redacted log lines.
+      render: text
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python version, garmin-coach commit, Claude client (Claude Code / Claude Desktop).
+    validations:
+      required: true

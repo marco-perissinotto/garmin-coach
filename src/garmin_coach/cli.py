@@ -1,4 +1,4 @@
-"""garmin-coach command line (PLAN §6.1). Phase 1 commands: doctor, backfill, sync, normalize, status, jobs, mcp."""
+"""garmin-coach command line (PLAN §6.1, §9.1): doctor, backfill, sync, normalize, status, jobs, context, mcp, install."""
 
 from __future__ import annotations
 
@@ -50,6 +50,8 @@ jobs_cli = typer.Typer(no_args_is_help=True, help="Job history and control.")
 app_cli.add_typer(jobs_cli, name="jobs")
 context_cli = typer.Typer(no_args_is_help=True, help="Context packs for the coach (Markdown + JSON).")
 app_cli.add_typer(context_cli, name="context")
+install_cli = typer.Typer(no_args_is_help=True, help="Register the MCP server in Claude Desktop / Claude Code.")
+app_cli.add_typer(install_cli, name="install")
 
 
 class _LazyConsole:
@@ -321,14 +323,7 @@ def jobs_prune(keep: int = 50) -> None:
 
 
 # -- context packs (PLAN §8) --------------------------------------------------------------------------------------
-# Tiers each pack needs (PLAN §6.5 table). In the CLI everything is refreshed synchronously.
-_PACK_TIERS: dict[str, set[Tier]] = {
-    "daily": {Tier.A, Tier.B, Tier.C, Tier.D},
-    "weekly": {Tier.C}, "7d": {Tier.C}, "28d": {Tier.C},
-    "athlete": {Tier.E, Tier.C}, "recent": {Tier.A}, "events": set(), "instructions": set(),
-}
-
-
+# In the CLI every tier a pack needs (render.PACK_TIERS) is refreshed synchronously.
 def _fresh(a: App, tiers: set[Tier], max_age: int | None) -> Any:
     """Startup check + synchronous freshness gate. Returns the Freshness object (or None when nothing to check)."""
     if not tiers:
@@ -357,7 +352,7 @@ def context_show(
     if what not in render.ALIASES:
         raise typer.BadParameter(f"choose one of: {', '.join(render.ALIASES)}")
     a = _app()
-    fr = None if offline else _fresh(a, _PACK_TIERS[what], max_age)
+    fr = None if offline else _fresh(a, set(render.PACK_TIERS[what]), max_age)
     _, texts = render.build_and_render(a.conn, a.paths, a.settings, clock=a.clock, freshness=fr,
                                        names=render.ALIASES[what], write=False)
     _utf8_stdout()
@@ -395,11 +390,59 @@ def context_export(
 
 
 @app_cli.command()
-def mcp() -> None:
+def mcp(
+    http: Annotated[bool, typer.Option("--http", help="Streamable HTTP on 127.0.0.1 with a random bearer token.")] = False,
+    port: Annotated[int, typer.Option(help="Port for --http (always bound to 127.0.0.1).")] = 8765,
+) -> None:
     """Start the MCP server on stdio (runs the startup check first; logs go to stderr/file, never stdout)."""
     from .mcp.server import serve
 
-    serve(_app())
+    serve(_app(), http=http, port=port)
+
+
+# -- client registration (PLAN §9.1) ------------------------------------------------------------------------------
+@install_cli.command("claude-desktop")
+def install_desktop(
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Print the resulting config instead of writing it.")] = False,
+) -> None:
+    """Add garmin-coach to claude_desktop_config.json (absolute paths, other servers kept, backup written)."""
+    from .install import InstallError, install_claude_desktop
+
+    try:
+        res = install_claude_desktop(REPO_ROOT, dry_run=dry_run)
+    except InstallError as exc:
+        err.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from None
+    if dry_run:
+        # Only our entry: other servers' entries may carry their own secrets in `env`.
+        _utf8_stdout()
+        servers = res.config["mcpServers"]
+        print(json.dumps({"mcpServers": {"garmin-coach": servers["garmin-coach"]}}, indent=2))
+        others = sorted(k for k in servers if k != "garmin-coach")
+        err.print(f"(dry run) would write {res.path}" + (f", keeping: {', '.join(others)}" if others else ""))
+        return
+    if not res.changed:
+        err.print(f"already registered in {res.path}")
+    else:
+        err.print(f"registered in {res.path}" + (f" (backup: {res.backup.name})" if res.backup else ""))
+    err.print("Next: quit Claude Desktop completely (also from the tray) and start it again, then ask "
+              "\"How should I train today?\"")
+
+
+@install_cli.command("claude-code")
+def install_code(
+    scope: Annotated[str, typer.Option(help="user (every folder) | local | project")] = "user",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Print the `claude mcp add` command only.")] = False,
+) -> None:
+    """Run `claude mcp add` for garmin-coach. Inside this repo Claude Code already uses the committed .mcp.json."""
+    from .install import InstallError, install_claude_code
+
+    try:
+        cmd = install_claude_code(REPO_ROOT, scope, dry_run=dry_run)
+    except InstallError as exc:
+        err.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from None
+    print(" ".join(cmd) if dry_run else f"registered with scope '{scope}': {' '.join(cmd[:7])} ...")
 
 
 def main() -> None:

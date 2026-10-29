@@ -111,8 +111,14 @@ def run_doctor(paths: Paths, settings: Settings, *, repo_root: Path, online: boo
         nxt = "create the key file, then run: garmin-coach doctor"
     elif failed:
         nxt = "fix the failed checks above, then run: garmin-coach doctor"
-    elif cache_empty:
-        nxt = "garmin-coach backfill   (or just start `garmin-coach mcp`: the history loads by itself)"
     else:
-        nxt = "garmin-coach status"
+        from .install import next_step_for_clients
+
+        client_step = next_step_for_clients(repo_root)
+        if cache_empty and client_step:
+            nxt = client_step + "   (the history loads by itself at the first server start)"
+        elif cache_empty:
+            nxt = "garmin-coach backfill   (or just start `garmin-coach mcp`: the history loads by itself)"
+        else:
+            nxt = client_step or "garmin-coach status"
     return checks, nxt

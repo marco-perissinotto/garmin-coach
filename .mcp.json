@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "garmin-coach": {
+      "command": "uv",
+      "args": ["run", "--project", ".", "garmin-coach", "mcp"]
+    }
+  }
+}

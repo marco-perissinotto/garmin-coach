@@ -13,6 +13,7 @@ from jinja2 import Environment, PackageLoader, StrictUndefined
 
 from ..athlete import load_inputs
 from ..clock import Clock, local_today, system_clock
+from ..garmin.endpoints import Tier
 from ..settings import Paths, Settings
 from . import builder, fmt
 
@@ -28,6 +29,13 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "athlete": ("athlete",),
     "recent": ("activities-recent",),
     "instructions": ("coach-instructions",),
+}
+# Tiers each pack needs (PLAN §6.5 table), shared by the CLI and the MCP server.
+PACK_TIERS: dict[str, frozenset[Tier]] = {
+    "daily": frozenset({Tier.A, Tier.B, Tier.C, Tier.D}),
+    "weekly": frozenset({Tier.C}), "7d": frozenset({Tier.C}), "28d": frozenset({Tier.C}),
+    "athlete": frozenset({Tier.E, Tier.C}), "recent": frozenset({Tier.A}), "events": frozenset(),
+    "instructions": frozenset(),
 }
 
 _env: Environment | None = None

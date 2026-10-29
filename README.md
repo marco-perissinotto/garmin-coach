@@ -42,7 +42,7 @@ Tre idee alla base:
 | 0 | Sicurezza, struttura del progetto, comando `doctor` | fatta |
 | 1 | Sincronizzazione, cache, caricamento dello storico, aggiornamento su richiesta, lavori in background | fatta |
 | 2 | Metriche (carico, forma, prontezza) e "context pack" per il coach | fatta |
-| 3 | Server MCP completo (tool, risorse, prompt), integrazione con Claude Desktop e Claude Code | da fare |
+| 3 | Server MCP completo (tool, risorse, prompt), integrazione con Claude Desktop e Claude Code | fatta |
 | 4 | Secondo computer (Mac), avviso di scadenza della chiave, rifiniture | da fare |
 | 5–6 | Opzionali: file FIT, nutrizione, dashboard locale | da fare |
 
@@ -54,7 +54,7 @@ motivazioni, in [docs/DECISIONS.md](docs/DECISIONS.md).
 - Un account Garmin Connect con una **chiave Personal API** (Garmin Connect → Impostazioni → Personal API). La chiave
   è di sola lettura e dura fino a un anno.
 - Python 3.12 o superiore e [uv](https://docs.astral.sh/uv/).
-- Windows 11 o macOS. Claude Desktop o Claude Code per usare il coach (dalla Fase 3).
+- Windows 11 o macOS. Claude Desktop o Claude Code per usare il coach.
 
 ## Installazione
 
@@ -76,7 +76,31 @@ uv run garmin-coach doctor
 ```
 
 `doctor` controlla la chiave, prova lo scambio del token con Garmin, apre il database, verifica i file personali e
-stampa il comando successivo da lanciare.
+stampa il comando successivo da lanciare (per esempio quello per collegare Claude Desktop, se lo trova installato).
+
+## Collegare Claude
+
+| Dove | Come |
+|---|---|
+| Claude Desktop | `uv run garmin-coach install claude-desktop`, poi chiudi Claude Desktop del tutto (anche dall'icona nell'area di notifica) e riaprilo. Il comando aggiunge la voce `garmin-coach` a `claude_desktop_config.json` con percorsi assoluti, lascia intatte le altre voci e salva una copia `.bak`. Con `--dry-run` mostra solo cosa scriverebbe. Funziona anche con la versione di Claude Desktop installata dal Microsoft Store |
+| Claude Code, in questa cartella | Niente da fare: il file `.mcp.json` del repo registra il server (Claude Code chiede conferma la prima volta). Il comando `/coach` fa il check-in del giorno; `/coach week` la revisione della settimana, `/coach plan` il piano dei prossimi 7 giorni, `/coach status` lo stato dei dati |
+| Claude Code, in qualsiasi cartella | `uv run garmin-coach install claude-code --scope user` |
+| Project di Claude | Crea un Project "Garmin coach" e incolla come istruzioni il testo di `garmin-coach context show instructions`. Non contiene dati personali: tutto il resto arriva dal server MCP |
+
+Al primo avvio su una cache vuota il server fa partire da solo il caricamento dello storico; nel frattempo puoi
+chiedere a Claude "i miei dati sono caricati?" e ti risponde con l'avanzamento.
+
+Cosa trova Claude nel server:
+
+- **Strumenti:** `get_daily_brief`, `get_athlete_profile`, `get_events`, `get_context_pack`, `get_range_summary`,
+  `get_training_load`, `list_activities`, `get_activity`, `get_sleep`, `get_hrv`, `get_body_battery`,
+  `get_heart_rate`, `get_weight`, `get_hr_zones`, `get_sync_status`, `refresh` ("ho appena sincronizzato
+  l'orologio"), `cancel_job` e `append_coach_note`, l'unico che scrive: aggiunge una regola concordata a
+  `coach-notes.md`. Ogni risposta con dati Garmin contiene un oggetto `freshness` con l'età dei dati.
+- **Prompt:** `daily_checkin`, `weekly_review`, `plan_week`, `race_readiness`, `explain_metric`. Ognuno include già i
+  pack che servono.
+- **Risorse:** i pack (`garmin-coach://context/daily-brief`, `last-7d`, `last-28d`, `athlete`, `events`), la storia e
+  le regole (`garmin-coach://knowledge/history`, `.../coach-notes`) e lo stato (`garmin-coach://status`).
 
 ## Dove stanno i dati
 
@@ -116,7 +140,8 @@ aggiorna per conto suo.
 | `garmin-coach context show [daily\|weekly\|events\|athlete\|recent\|instructions] [--offline]` | Stampa un pack pronto da incollare in una chat; senza `--offline` aggiorna prima i dati che servono |
 | `garmin-coach context build [--offline]` | Ricalcola le metriche e riscrive tutti i pack in `<dati>/context/` |
 | `garmin-coach context export --zip [--offline]` | Aggiorna tutto e impacchetta i pack in uno zip (per esempio per un Project di ChatGPT) |
-| `garmin-coach mcp` | Avvia il server MCP per Claude. Se la cache è vuota, fa partire da solo il caricamento dello storico |
+| `garmin-coach mcp [--http --port 8765]` | Avvia il server MCP per Claude. Se la cache è vuota, fa partire da solo il caricamento dello storico. `--http` lo espone solo su `127.0.0.1` con un token casuale stampato all'avvio |
+| `garmin-coach install claude-desktop \| claude-code [--dry-run]` | Registra il server in Claude Desktop o in Claude Code |
 
 Codici di uscita di `backfill` e `sync`: 0 completato, 2 parziale (riprende al prossimo avvio), 1 fallito.
 
@@ -161,6 +186,8 @@ i dati in cache con l'avviso che potrebbero non essere aggiornati.
   chiavi e token.
 - Il programma usa il client Python ufficiale di Garmin per l'autenticazione e fa solo richieste di lettura.
 - Il server MCP comunica solo con il processo di Claude sulla stessa macchina (stdio); non apre porte di rete.
+  L'opzione `--http` ascolta solo su `127.0.0.1` e richiede un token casuale generato a ogni avvio.
+- Le configurazioni generate per Claude contengono solo il percorso di `uv` e del repo: nessuna chiave.
 - Il gancio pre-commit e un test rifiutano qualsiasi file che contenga una stringa simile a una chiave o a un token.
 
 ## Sviluppo

@@ -81,6 +81,20 @@ def test_max_age_zero_forces(paths, settings, conn, clock) -> None:  # type: ign
     f = Fetchers()
     fr = gate(paths, settings, conn, clock, f).ensure_fresh({Tier.B}, {Tier.B: timedelta(0)}, trigger="mcp")
     assert fr.tiers["B"].refreshed_now and f.calls == 6
+    assert not fr.stale and not fr.tiers["B"].stale  # just refreshed: fresh even though max_age=0
+
+
+def test_max_age_zero_forces_background_job(paths, settings, conn, clock) -> None:  # type: ignore[no-untyped-def]
+    warm(conn, settings, clock)
+    jobs = JobManager(paths, settings, conn_factory=lambda: db.connect(paths.db),
+                      fetcher_factory=lambda kind: FakeGarmin(), clock=clock)
+    fr = gate(paths, settings, conn, clock, Fetchers(), jobs=jobs).ensure_fresh({Tier.C}, {Tier.C: timedelta(0)},
+                                                                                 trigger="mcp")
+    assert fr.tiers["C"].background_refresh_started
+    row = conn.execute("SELECT id, force FROM job").fetchone()
+    assert row["force"] == 1
+    job = jobs.wait(row["id"], timeout=20)
+    assert job and job["status"] == "done" and job["calls_done"] > 0  # forced: not skipped as fresh
 
 
 def test_cooldown_suppresses_calls(paths, settings, conn, clock) -> None:  # type: ignore[no-untyped-def]

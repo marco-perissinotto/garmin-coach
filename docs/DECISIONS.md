@@ -159,3 +159,51 @@ and problems loading the owner's files.
 
 **D-048 Daily HR maximum is not used.** Garmin's daily HR maximum can be an
 optical artefact (174 bpm on a rest morning, 2026-10-29), so `daily.hr_max` is not used by any metric or pack.
+
+## Phase 3: MCP server and Claude integration (2026-10-29)
+
+**D-050 One SQLite connection per tool call.** The SDK runs sync tools in worker threads, so two questions can run
+at once. Each call opens its own connection and its own freshness gate; the refresh lock (with its double-check)
+keeps refreshes single, and the "one background job" guard of the gate is now process-wide instead of per gate
+instance. Covered by `test_concurrent_calls_make_one_refresh`.
+
+**D-051 Tool contract.** Tool logic lives in `mcp/tools.py` (`CoachService`), registration and model-facing
+descriptions in `mcp/server.py`. Tools never raise: bad input and internal errors come back as `{"error": ...}`;
+a missing API key adds an `error` pointing to `doctor` while the cached data is still served. Payload guard:
+60 000 characters per answer, plus per-tool caps (92 days day-by-day, 731 days by week, 100 activities, 40 splits,
+Body Battery curve at 15 min, HR samples averaged per 10 min). `get_daily_brief` returns the brief as structured JSON
+(the Italian labels of the packs included); the Markdown is available through `get_context_pack`. A brief for a past
+date is built "as of" that day, while metrics are always computed for the real today.
+
+**D-052 `max_age_minutes=0`.** Two gate bugs found in the live test: after a forced refresh the answer still said
+`stale=true` (with max age 0 every age is stale, including the tier just refreshed), and forced background tiers were
+enqueued without `force`, so the job skipped them as fresh. Fixed: tiers refreshed by the request count as fresh, and
+the background job inherits `force`. In the MCP layer, 0 forces only the synchronous tiers (A/B) when the tool needs
+them ("I just synced my watch" = ~7 calls, not ~20); background tiers are forced only when they are all the tool needs.
+
+**D-053 Lazy activity detail does not touch tier state.** `get_activity` on an activity without detail runs the two
+calls with an empty tier set, so a single-activity fetch never marks tier A fresh; cooldowns on A are respected.
+
+**D-054 `refresh` rate limit.** Once per tier per 5 minutes, counting only refresh jobs requested through MCP: a
+startup or freshness-gate job must not block "I just synced my watch" right after Claude starts. An active job that
+already covers the tiers is returned instead of enqueuing another (unless `force`).
+
+**D-055 Prompts.** The five prompts embed the packs they need and give their instructions in the owner's
+`advice_language` (Italian or English). `explain_metric` quotes the matching section of `docs/METRICS.md`, read from
+the repo the server runs from (`uv run --project`).
+
+**D-056 Client registration.** On this laptop Claude Desktop is the Microsoft Store build: its config lives in
+`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\`, not in `%APPDATA%\Claude\`; `install` picks the package
+folder when it exists. The `uv` path is absolute but not symlink-resolved (the WinGet/Homebrew shim survives uv
+upgrades). The file is backed up (`.bak`), other entries are kept, invalid JSON is refused. `--dry-run` prints only the
+garmin-coach entry, because other servers' entries may carry their own secrets. `install claude-code` replaces our
+own entry (`claude mcp remove` then `add`). The committed `.mcp.json` uses `uv` from PATH and `--project .`, so it is
+portable between machines.
+
+**D-057 HTTP mode.** `mcp --http` serves streamable HTTP on 127.0.0.1 only, behind the SDK's bearer-token check with
+a random token generated at each start and printed to stderr (never logged).
+
+**D-058 Measurements.** Server start to MCP `initialize` over stdio: 1.6–2.1 s; about 0.9 s of it is importing the
+MCP SDK, our modules add ~0.1 s. A tool on a fresh cache answers in ~0.05 s; a live forced A+B refresh made 7 calls
+in 4–8 s (the activity search alone took 0.9–4.3 s on Garmin's side). The `daily_checkin` prompt is ~5k tokens with
+the owner's real data.

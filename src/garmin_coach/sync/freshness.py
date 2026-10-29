@@ -34,6 +34,10 @@ log = logging.getLogger(__name__)
 # (budget_calls, timeout_s) -> fetcher. timeout None = no wall-clock limit.
 SyncFetcherFactory = Callable[[int, float | None], Fetcher]
 
+# One background enqueue at a time per process: the MCP server builds a gate per request (one SQLite connection
+# per worker thread), so the "is a job already refreshing these tiers?" check must not be per gate instance.
+_BG_GUARD = threading.Lock()
+
 
 class TierFreshness(BaseModel):
     age_minutes: int | None = None
@@ -81,7 +85,6 @@ class FreshnessGate:
         self.clock = clock
         self.background = background
         self.post_run = post_run
-        self._bg_guard = threading.Lock()
         self._bg_job: int | None = None
 
     # -- helpers --------------------------------------------------------------------------------------------------
@@ -181,7 +184,8 @@ class FreshnessGate:
 
             # 5. background tiers
             if bg_part:
-                bg |= self._start_background(bg_part, trigger, reasons)
+                forced = max_age is not None and all(max_age.get(t, timedelta(1)) <= timedelta(0) for t in bg_part)
+                bg |= self._start_background(bg_part, trigger, reasons, force=forced)
         except Exception as exc:  # noqa: BLE001 - 6. never fail the consumer
             msg = redact(f"{type(exc).__name__}: {exc}")
             log.exception("freshness gate failed")
@@ -191,7 +195,8 @@ class FreshnessGate:
 
         now = self.clock()
         states = repo.tier_states(self.conn)
-        still_stale = self._stale(tiers, states, now, max_age)
+        # A tier refreshed by this very request is fresh, even when max_age=0 ("force") makes any age stale.
+        still_stale = self._stale(tiers - refreshed, states, now, max_age)
         for t in still_stale:
             if t not in reasons:
                 err = states.get(t.value, {}).get("last_error")
@@ -216,14 +221,15 @@ class FreshnessGate:
             reasons[t] = f"refresh {res.status}" + (f": {res.error}" if res.error else "")
         return res.tiers_completed
 
-    def _start_background(self, tiers: set[Tier], trigger: str, reasons: dict[Tier, str]) -> set[Tier]:
+    def _start_background(self, tiers: set[Tier], trigger: str, reasons: dict[Tier, str], *,
+                          force: bool = False) -> set[Tier]:
         if self.jobs is None:
             for t in tiers:
                 reasons[t] = "stale (no background runner)"
             return set()
-        with self._bg_guard:
+        with _BG_GUARD:
             existing = self.jobs.has_active(tiers)
             if existing:
                 return tiers
-            self._bg_job = self.jobs.enqueue("refresh", tiers, trigger)
+            self._bg_job = self.jobs.enqueue("refresh", tiers, trigger, force=force)
         return tiers

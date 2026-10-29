@@ -61,10 +61,11 @@ class App:
                                     fetcher_factory=self.job_fetcher, clock=self.clock, post_run=self.post_run)
         return self._jobs
 
-    def gate(self, *, background: bool) -> FreshnessGate:
+    def gate(self, *, background: bool, conn: sqlite3.Connection | None = None) -> FreshnessGate:
+        """``conn``: the caller's own connection (MCP tools run in worker threads, one connection each)."""
         from .sync.freshness import FreshnessGate
 
-        return FreshnessGate(self.paths, self.settings, self.conn, fetcher_factory=self.fetcher, jobs=self.jobs,
+        return FreshnessGate(self.paths, self.settings, conn or self.conn, fetcher_factory=self.fetcher, jobs=self.jobs,
                              clock=self.clock, background=background, post_run=self.post_run)
 
     def post_run(self, conn: sqlite3.Connection) -> None:

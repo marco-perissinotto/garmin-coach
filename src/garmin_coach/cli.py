@@ -153,7 +153,7 @@ def doctor(offline: Annotated[bool, typer.Option("--offline", help="Skip the tok
     from .doctor import run_doctor
 
     a = _app()
-    checks, nxt = run_doctor(a.paths, a.settings, repo_root=REPO_ROOT, online=not offline)
+    checks, nxt = run_doctor(a.paths, a.settings, repo_root=REPO_ROOT, online=not offline, clock=a.clock)
     for c in checks:
         mark = "[green]OK  [/]" if c.ok else ("[red]FAIL[/]" if c.critical else "[yellow]WARN[/]")
         console.print(f"{mark} {c.name}: {c.detail}", highlight=False)

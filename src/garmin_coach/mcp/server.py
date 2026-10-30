@@ -14,7 +14,7 @@ import sys
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..app import App
 from ..sync.startup import startup_check
@@ -35,6 +35,50 @@ MaxAge = Annotated[int | None, Field(
 DateArg = Annotated[str | None, Field(description="Calendar date YYYY-MM-DD (the athlete's local day). Default today.")]
 StartArg = Annotated[str | None, Field(description="First day, YYYY-MM-DD (inclusive).")]
 EndArg = Annotated[str | None, Field(description="Last day, YYYY-MM-DD (inclusive). Default today.")]
+
+StateText = Annotated[str, Field(description="One short line, 3-300 characters.")]
+
+
+class SymptomIn(BaseModel):
+    """A symptom the athlete reported (never a measured value)."""
+
+    text: StateText
+    since: Annotated[str | None, Field(description="YYYY-MM-DD when it started, if known.")] = None
+    noted: Annotated[str | None, Field(description="YYYY-MM-DD when it was reported. Default today.")] = None
+
+
+class PlanDayIn(BaseModel):
+    date: Annotated[str, Field(description="YYYY-MM-DD, within today - 7 .. today + 90 days.")]
+    session: StateText
+
+
+class PlanIn(BaseModel):
+    """The plan agreed for the next days (at most 14) and the conditions that change it."""
+
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
+    from_: Annotated[str | None, Field(alias="from", description="First day, YYYY-MM-DD.")] = None
+    to: Annotated[str | None, Field(description="Last day, YYYY-MM-DD. Default: the last plan day.")] = None
+    days: list[PlanDayIn] = []
+    change_if: Annotated[list[str], Field(description="Conditions that change the plan, one line each (max 8).")] = []
+
+
+class OpenDecisionIn(BaseModel):
+    question: StateText
+    decide_by: Annotated[str | None, Field(description="Deadline YYYY-MM-DD, within 90 days.")] = None
+    noted: Annotated[str | None, Field(description="YYYY-MM-DD when it was raised. Default today.")] = None
+
+
+class TakenDecisionIn(BaseModel):
+    text: StateText
+    date: Annotated[str | None, Field(description="YYYY-MM-DD when it was taken. Default today.")] = None
+
+
+class DecisionsIn(BaseModel):
+    """Decisions still open (max 8, with a deadline) and decisions taken (max 10)."""
+
+    open: list[OpenDecisionIn] = []
+    taken: list[TakenDecisionIn] = []
+
 
 PACK_RESOURCES = {"daily-brief": "daily", "last-7d": "7d", "last-28d": "28d", "athlete": "athlete", "events": "events"}
 
@@ -175,8 +219,37 @@ def build_server(app: App, *, http_token: str | None = None, port: int = 8765) -
     def append_coach_note(text: Annotated[str, Field(description="One sentence, max 500 characters.")]) -> dict[str, Any]:
         """Record a standing coaching rule or agreement (e.g. "long run on Saturdays") as a dated line in the
         athlete's coach-notes.md, so it applies in every future conversation. Only for durable agreements the user
-        confirmed, not for daily data. The only write tool; it never touches Garmin."""
+        confirmed, not for daily data or short-term plans (use update_coaching_state). Writes only to
+        coach-notes.md; it never touches Garmin."""
         return service.append_coach_note(text)
+
+    @mcp.tool()
+    def get_coaching_state() -> dict[str, Any]:
+        """The athlete's short-term coaching state from earlier chats: symptoms they reported, the plan agreed for the
+        next days with the conditions that change it, decisions open and taken; with its age, `stale` (older than
+        `stale_after_days`: confirm it with the athlete before using it), `plan_expired` and `decisions_due`. The
+        daily brief already embeds the same object: call this to re-read it after an update. Local file only."""
+        return service.get_coaching_state()
+
+    @mcp.tool()
+    def update_coaching_state(
+            symptoms: Annotated[list[SymptomIn] | None, Field(description=(
+                "All current reported symptoms (max 8); [] clears them."))] = None,
+            plan: Annotated[PlanIn | None, Field(description="The whole agreed plan; {} clears it.")] = None,
+            decisions: Annotated[DecisionsIn | None, Field(description=(
+                "All open and taken decisions; {} clears them."))] = None,
+            confirm: Annotated[bool, Field(description=(
+                "true re-dates the stored state unchanged, after the athlete confirmed it."))] = False,
+    ) -> dict[str, Any]:
+        """Overwrite the athlete's short-term coaching state: symptoms they reported, the plan agreed for the next
+        days with the conditions that change it, decisions open and taken. Pass only the sections that changed, each
+        in full (an omitted section is kept, an empty one cleared); confirm=true re-dates an unchanged state. Never
+        put Garmin values, durable rules (use append_coach_note) or past sessions here. Local file only, never
+        touches Garmin."""
+        return service.update_coaching_state(
+            None if symptoms is None else [s.model_dump(exclude_none=True) for s in symptoms],
+            None if plan is None else plan.model_dump(by_alias=True, exclude_none=True),
+            None if decisions is None else decisions.model_dump(exclude_none=True), confirm)
 
     @mcp.tool()
     def get_sync_status() -> dict[str, Any]:
@@ -224,6 +297,11 @@ def build_server(app: App, *, http_token: str | None = None, port: int = 8765) -
                   description="Coaching rules agreed so far (coach-notes.md).")
     def knowledge_notes() -> str:
         return service.knowledge_text("coach-notes")
+
+    @mcp.resource("garmin-coach://knowledge/coaching-state", name="coaching-state", mime_type="application/yaml",
+                  description="The current short-term coaching state (coaching-state.yaml).")
+    def knowledge_state() -> str:
+        return service.knowledge_text("coaching-state")
 
     @mcp.resource("garmin-coach://status", name="status", mime_type="application/json",
                   description="Sync status: history loaded, cache age per tier, running job progress.")

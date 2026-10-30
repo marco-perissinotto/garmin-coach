@@ -20,6 +20,9 @@ from contextlib import contextmanager
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
+from pydantic import ValidationError
+
+from .. import state as state_m
 from ..app import App
 from ..athlete import load_inputs
 from ..clock import local_today
@@ -29,6 +32,7 @@ from ..garmin.endpoints import REFRESH_TIERS, SYNC_TIERS, Tier
 from ..metrics import compute, sport
 from ..metrics import events as events_m
 from ..secrets import key_file_status, redact
+from ..settings import STATE_FILE
 from ..status import build_status
 from ..store import repo
 from ..sync import jobs as jobs_mod
@@ -131,6 +135,7 @@ class CoachService:
     def __init__(self, app: App) -> None:
         self.app = app
         self._note_lock = threading.Lock()
+        self._state_lock = threading.Lock()
         self._refresh_lock = threading.Lock()
         _ = app.jobs  # create the job manager now, not concurrently from two tool threads
 
@@ -182,16 +187,20 @@ class CoachService:
         return out
 
     def _pack(self, conn: sqlite3.Connection, fr: Freshness | None, day: date | None = None) -> builder.ContextPack:
-        """The ContextPack as of ``day`` (default today). Metrics are always (re)computed for the real today."""
-        inputs = load_inputs(self.app.paths)
+        """The ContextPack as of ``day`` (default today). Metrics are always (re)computed for the real today; the
+        coaching state is current, so a past-date pack leaves it out."""
         today = self._today()
+        inputs = load_inputs(self.app.paths, today)
         builder.ensure_metrics(conn, inputs, today, builder.inputs_mtime(self.app.paths.config_dir))
         clock = self.app.clock
+        past = False
         if day is not None and day != today:
+            past = True
             pinned = datetime.combine(day, time(23, 59)).astimezone().astimezone(UTC)
             clock = lambda: pinned  # noqa: E731
-        return builder.build(conn, inputs, clock=clock, freshness=fr,
-                             recent_n=self.app.settings.context.recent_activities)
+        ctx = self.app.settings.context
+        return builder.build(conn, inputs, clock=clock, freshness=fr, recent_n=ctx.recent_activities,
+                             include_state=not past, state_stale_days=ctx.state_stale_days)
 
     def _ensure_metrics(self, conn: sqlite3.Connection) -> None:
         inputs = load_inputs(self.app.paths)
@@ -225,7 +234,8 @@ class CoachService:
             "readiness_heuristic": p.readiness, "sleep_last_night": p.sleep, "hrv_last_night": p.hrv,
             "resting_hr": p.rhr, "body_battery": p.body_battery, "stress_yesterday": p.stress_yesterday,
             "activities_today": p.activities_today, "activities_yesterday": p.activities_yesterday,
-            "training_load": p.load, "next_events": p.events[:3], "problems": p.problems,
+            "training_load": p.load, "next_events": p.events[:3], "coaching_state": p.coaching_state,
+            "problems": p.problems,
         }
         return self._reply(fr, **{k: v for k, v in brief.items() if v not in (None, [], {})})
 
@@ -302,9 +312,51 @@ class CoachService:
         log.info("coach note appended (%d chars)", len(note))
         return {"appended": line, "file": "coach-notes.md"}
 
+    # -- coaching state (local file only, never touches Garmin) ----------------------------------------------------
+    def _state_view(self, state: state_m.CoachingState | None, problems: list[str]) -> dict[str, Any]:
+        return state_m.view(state, problems, self._today(), self.app.settings.context.state_stale_days)
+
+    @_safe
+    def get_coaching_state(self) -> dict[str, Any]:
+        return self._state_view(*state_m.load_state(self.app.paths, self._today()))
+
+    @_safe
+    def update_coaching_state(self, symptoms: list[dict[str, Any]] | None = None, plan: dict[str, Any] | None = None,
+                              decisions: dict[str, Any] | None = None, confirm: bool = False) -> dict[str, Any]:
+        """Per-section replace (D-061): a passed section replaces the stored one, an empty one clears it, an omitted
+        one is kept; ``confirm`` alone re-dates an unchanged state."""
+        passed = {k: v for k, v in (("symptoms", symptoms), ("plan", plan), ("decisions", decisions))
+                  if v is not None}
+        if not passed and not confirm:
+            raise InputError("nothing to update: pass at least one section or confirm=true")
+        paths = self.app.paths
+        with self._state_lock:
+            existing, problems = state_m.load_state(paths, self._today())
+            if problems and len(passed) < len(state_m.SECTIONS):
+                detail = problems[0].removeprefix(f"{STATE_FILE} non valido ").strip("()")
+                raise InputError(f"{STATE_FILE} cannot be read ({detail}): fix it by hand, or pass all three "
+                                 "sections to replace it")
+            if existing is None and not passed:
+                raise InputError("no coaching state to confirm")
+            data = existing.model_dump(by_alias=True, exclude={"updated", "updated_by"}) if existing else {}
+            data.update(passed)
+            if not data.get("plan"):
+                data["plan"] = None
+            try:
+                new = state_m.CoachingState.model_validate(data)
+                saved = state_m.save_state(paths, new, self.app.clock(), past_window=passed)
+            except ValidationError as exc:
+                raise InputError(state_m.validation_message(exc)) from None
+            except state_m.StateError as exc:
+                raise InputError(str(exc)) from None
+        log.info("coaching state updated: symptoms=%d plan_days=%d open=%d taken=%d", len(saved.symptoms),
+                 len(saved.plan.days) if saved.plan else 0, len(saved.decisions.open), len(saved.decisions.taken))
+        return {**self._state_view(saved, []), "changed": list(passed) or ["confirmed"]}
+
     def knowledge_text(self, name: str) -> str:
-        """Resources garmin-coach://knowledge/{history,coach-notes}: the owner's Markdown verbatim (no refresh)."""
-        path = self.app.paths.config_dir / f"{name}.md"
+        """Resources garmin-coach://knowledge/{history,coach-notes,coaching-state}: the owner's file verbatim (no
+        refresh)."""
+        path = self.app.paths.config_dir / (STATE_FILE if name == "coaching-state" else f"{name}.md")
         if not path.exists():
             return f"_{path.name} not found in the garmin-coach config folder._\n"
         return path.read_text(encoding="utf-8")

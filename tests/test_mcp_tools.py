@@ -15,8 +15,9 @@ from typing import Any
 import anyio
 import pytest
 from fakes import FakeClock, FakeGarmin
-from test_context import write_inputs
+from test_context import STATE, write_inputs, write_state
 
+from garmin_coach import state as state_m
 from garmin_coach.app import App
 from garmin_coach.garmin.client import NetworkError
 from garmin_coach.garmin.endpoints import REFRESH_TIERS, Tier
@@ -25,7 +26,7 @@ from garmin_coach.mcp import tools as tools_mod
 from garmin_coach.mcp.server import build_server
 from garmin_coach.mcp.tools import CoachService
 from garmin_coach.secrets import KeyFileStatus
-from garmin_coach.settings import Paths, Settings
+from garmin_coach.settings import STATE_FILE, Paths, Settings
 from garmin_coach.store import db, repo
 from garmin_coach.sync import jobs as jobs_mod
 from garmin_coach.sync.runner import Runner
@@ -305,6 +306,7 @@ EXPECTED_TOOLS = {
     "get_daily_brief", "get_athlete_profile", "get_events", "get_context_pack", "get_range_summary",
     "get_training_load", "list_activities", "get_activity", "get_sleep", "get_hrv", "get_body_battery",
     "get_heart_rate", "get_weight", "get_hr_zones", "append_coach_note", "get_sync_status", "refresh", "cancel_job",
+    "get_coaching_state", "update_coaching_state",
 }
 
 
@@ -327,9 +329,19 @@ def test_server_registers_everything_and_answers(warmed) -> None:  # type: ignor
             uris = {str(r.uri) for r in (await client.list_resources()).resources}
             assert uris == {f"garmin-coach://context/{n}" for n in ("daily-brief", "last-7d", "last-28d", "athlete",
                                                                      "events")} | {
-                "garmin-coach://knowledge/history", "garmin-coach://knowledge/coach-notes", "garmin-coach://status"}
+                "garmin-coach://knowledge/history", "garmin-coach://knowledge/coach-notes",
+                "garmin-coach://knowledge/coaching-state", "garmin-coach://status"}
             text = (await client.read_resource("garmin-coach://context/daily-brief")).contents[0].text  # type: ignore[union-attr]
             assert text.startswith("# Brief del giorno")
+            assert body["coaching_state"]["state"] is None
+            res = await client.call_tool("update_coaching_state", {"plan": {"from": "2026-10-29", "days": [
+                {"date": "2026-10-29", "session": "corsa facile 40'"}]}})
+            upd = json.loads(res.content[0].text)  # type: ignore[union-attr]
+            assert upd["changed"] == ["plan"] and upd["state"]["plan"]["from"] == "2026-10-29"
+            res = await client.call_tool("get_coaching_state", {})
+            assert json.loads(res.content[0].text)["state"]["plan"]["to"] == "2026-10-29"  # type: ignore[union-attr]
+            yaml_text = (await client.read_resource("garmin-coach://knowledge/coaching-state")).contents[0].text  # type: ignore[union-attr]
+            assert yaml_text == (svc.app.paths.config_dir / STATE_FILE).read_text(encoding="utf-8")
             status = json.loads((await client.read_resource("garmin-coach://status")).contents[0].text)  # type: ignore[union-attr]
             assert status["history_loaded"] is True
             assert {p.name for p in (await client.list_prompts()).prompts} == {
@@ -388,3 +400,128 @@ def test_mcp_entry_point_writes_nothing_to_stdout_before_protocol(tmp_path: Path
     p = subprocess.run([sys.executable, "-m", "garmin_coach", "mcp"], input="", capture_output=True, text=True,
                        env=env, timeout=60)
     assert p.stdout.strip() == ""
+
+
+# -- coaching state (local file only) ----------------------------------------------------------------------------
+SYMPTOMS = [{"text": "fastidio al polpaccio destro", "since": "2026-10-26"}]
+PLAN = {"from": "2026-10-29", "days": [{"date": "2026-10-29", "session": "corsa facile 40' in Z2"},
+                                       {"date": "2026-11-01", "session": "lungo 80' solo senza dolore"}],
+        "change_if": ["dolore sopra 3/10: passare alla bici"]}
+DECISIONS = {"open": [{"question": "gara di prova, sì o no", "decide_by": "2026-11-04"}],
+             "taken": [{"text": "alla mezza con le scarpe da allenamento"}]}
+
+
+@pytest.fixture
+def svc(paths: Paths, settings: Settings, clock: FakeClock) -> CoachService:
+    """A service without a warmed cache: the state tools never touch the database or Garmin."""
+    return CoachService(make_app(paths, settings, clock, Fetchers()))
+
+
+def _state_bytes(svc: CoachService) -> bytes:
+    return (svc.app.paths.config_dir / STATE_FILE).read_bytes()
+
+
+def test_update_replaces_only_the_sections_passed(svc: CoachService) -> None:
+    r = svc.update_coaching_state(symptoms=SYMPTOMS, plan=PLAN, decisions=DECISIONS)
+    assert "error" not in r, r
+    assert r["changed"] == ["symptoms", "plan", "decisions"] and r["updated_by"] == "coach" and r["age_days"] == 0
+    r = svc.update_coaching_state(symptoms=[{"text": "polpaccio a posto, solo rigidità al mattino"}])
+    assert r["changed"] == ["symptoms"]
+    st = r["state"]
+    assert [s["text"] for s in st["symptoms"]] == ["polpaccio a posto, solo rigidità al mattino"]
+    assert st["symptoms"][0]["noted"] == "2026-10-28"  # default: the write day
+    assert len(st["plan"]["days"]) == 2 and st["plan"]["to"] == "2026-11-01"
+    assert st["decisions"]["taken"][0]["date"] == "2026-10-28"
+    r = svc.update_coaching_state(plan={})
+    assert r["changed"] == ["plan"] and r["state"]["plan"] is None
+    assert r["state"]["symptoms"] and r["state"]["decisions"]["open"]
+    r = svc.update_coaching_state(symptoms=[], decisions={})
+    assert r["state"] == {"symptoms": [], "plan": None, "decisions": {"open": [], "taken": []}}
+
+
+def test_confirm_bumps_updated_only(svc: CoachService, clock: FakeClock) -> None:
+    assert svc.update_coaching_state(confirm=True)["error"] == "no coaching state to confirm"
+    first = svc.update_coaching_state(symptoms=SYMPTOMS, plan=PLAN)
+    clock.advance(days=8)
+    stale = svc.get_coaching_state()
+    assert stale["stale"] and stale["age_days"] == 8 and stale["plan_expired"]
+    r = svc.update_coaching_state(confirm=True)
+    assert r["changed"] == ["confirmed"] and r["state"] == first["state"]
+    assert r["updated"] > first["updated"] and r["age_days"] == 0 and not r["stale"]
+
+
+def test_unreadable_file_refuses_partial_update(svc: CoachService) -> None:
+    f = svc.app.paths.config_dir / STATE_FILE
+    f.write_text("symptoms: [unclosed", encoding="utf-8")
+    before = _state_bytes(svc)
+    r = svc.update_coaching_state(symptoms=SYMPTOMS)
+    assert r["error"].startswith(f"{STATE_FILE} cannot be read (") and "pass all three sections" in r["error"]
+    assert _state_bytes(svc) == before
+    assert "cannot be read" in svc.update_coaching_state(confirm=True)["error"]
+    g = svc.get_coaching_state()
+    assert g["state"] is None and g["problems"] and g["file"] == STATE_FILE
+    r = svc.update_coaching_state(symptoms=SYMPTOMS, plan=PLAN, decisions=DECISIONS)
+    assert "error" not in r and state_m.load_state(svc.app.paths)[1] == []
+
+
+def test_update_errors_leave_the_file_untouched(svc: CoachService) -> None:
+    svc.update_coaching_state(symptoms=SYMPTOMS, plan=PLAN, decisions=DECISIONS)
+    before = _state_bytes(svc)
+    cases: list[tuple[dict[str, Any], str]] = [
+        ({}, "nothing to update: pass at least one section or confirm=true"),
+        ({"symptoms": [{"text": f"sintomo {i}"} for i in range(9)]}, "symptoms: 9 items, max 8: drop resolved ones"),
+        ({"plan": {"days": [{"date": "2026-10-29", "session": "x" * 412}]}},
+         "plan.days[0].session is too long (412 characters, max 300): summarise it"),
+        ({"decisions": {"open": [{"question": "gara sì o no", "decide_by": "2027-03-01"}]}},
+         "decisions.open[0].decide_by must be within 90 days from today"),
+        ({"plan": {"days": [{"date": "29/10", "session": "corsa facile"}]}},
+         "plan.days[0].date must be a date as YYYY-MM-DD"),
+        ({"symptoms": [{"since": "2026-10-20"}]}, "symptoms[0].text is required"),
+        ({"symptoms": [{"text": "s" * 300}] * 8, "plan": {"days": [{"date": "2026-10-29", "session": "p" * 300}] * 6}},
+         "state too large ("),
+    ]
+    for kwargs, message in cases:
+        r = svc.update_coaching_state(**kwargs)
+        assert set(r) == {"error"} and r["error"].startswith(message), (r, message)
+        assert _state_bytes(svc) == before
+
+
+def test_concurrent_updates_both_land(svc: CoachService, monkeypatch: pytest.MonkeyPatch) -> None:
+    real_load = state_m.load_state
+
+    def slow_load(*args: Any, **kwargs: Any) -> Any:
+        out = real_load(*args, **kwargs)
+        time.sleep(0.05)  # widen the read-modify-write window: without the lock the second write drops the first
+        return out
+
+    monkeypatch.setattr(state_m, "load_state", slow_load)
+    threads = [threading.Thread(target=svc.update_coaching_state, kwargs={"symptoms": SYMPTOMS}),
+               threading.Thread(target=svc.update_coaching_state, kwargs={"decisions": DECISIONS})]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    st = svc.get_coaching_state()["state"]
+    assert st["symptoms"] and st["decisions"]["open"]
+
+
+def test_get_coaching_state_and_resource(svc: CoachService) -> None:
+    assert svc.get_coaching_state() == {"state": None, "note": "no coaching state recorded yet", "file": STATE_FILE}
+    assert "not found" in svc.knowledge_text("coaching-state")
+    write_state(svc.app.paths)
+    g = svc.get_coaching_state()
+    assert set(g) == {"state", "updated", "updated_by", "age_days", "stale", "stale_after_days", "plan_expired",
+                      "decisions_due", "file"}
+    assert g["updated_by"] == "coach" and g["age_days"] == 0 and g["stale_after_days"] == 7
+    assert g["state"]["plan"]["days"][1]["session"] == "lungo 80' solo se il polpaccio è a zero"
+    assert svc.knowledge_text("coaching-state") == STATE
+
+
+def test_daily_brief_carries_the_state_but_not_for_past_days(warmed) -> None:  # type: ignore[no-untyped-def]
+    svc, _ = warmed
+    write_state(svc.app.paths)
+    brief = svc.get_daily_brief()
+    assert brief["coaching_state"]["state"]["symptoms"][0]["since"] == "2026-10-26"
+    assert not brief["coaching_state"]["stale"]
+    past = svc.get_daily_brief(date_="2026-10-20")
+    assert "error" not in past and "coaching_state" not in past

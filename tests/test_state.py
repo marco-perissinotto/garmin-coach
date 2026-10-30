@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -175,3 +176,10 @@ def test_redaction_on_disk(paths: Paths, clock: FakeClock) -> None:
     save(paths, {"plan": {"days": [{"date": _today(clock), "session": f"corsa facile, chiave {secret}"}]}}, clock)
     text = (paths.config_dir / STATE_FILE).read_text(encoding="utf-8")
     assert secret not in text and "***REDACTED***" in text
+
+
+def test_example_file_is_valid(paths: Paths) -> None:
+    example = Path(__file__).resolve().parents[1] / "config" / "coaching-state.example.yaml"
+    (paths.config_dir / STATE_FILE).write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+    state, problems = load_state(paths)
+    assert problems == [] and state is not None and state.plan is not None and len(state.plan.days) == 2

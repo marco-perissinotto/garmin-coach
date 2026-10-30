@@ -15,4 +15,8 @@ sync:
   cooldown_minutes: {rate_limit: 120, network_error: 10}
   download_fit: false
 optional_endpoints: {nutrition: false, womens_health: false, hydration: true, spo2: true}
-context: {daily_token_budget: 2500, weekly_token_budget: 6000, recent_activities: 10}
+context:
+  daily_token_budget: 3500       # includes the coaching state (at most ~1 000 tokens)
+  weekly_token_budget: 6000
+  recent_activities: 10
+  state_stale_days: 7            # a coaching state older than this is flagged and confirmed with the athlete

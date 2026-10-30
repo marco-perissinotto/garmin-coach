@@ -37,6 +37,14 @@ def day_label(d: date) -> str:
     return f"{WEEKDAYS_IT[d.weekday()]} {d.day:02d}/{d.month:02d}"
 
 
+def ddmm(value: str | date | None) -> str:
+    """``dd/mm`` from a date or an ISO date/datetime string (coaching state dates)."""
+    if not value:
+        return "–"
+    d = value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
+    return f"{d.day:02d}/{d.month:02d}"
+
+
 def duration(seconds: float | None) -> str:
     if not seconds:
         return "–"

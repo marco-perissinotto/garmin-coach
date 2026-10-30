@@ -3,6 +3,19 @@
 ## Segnali
 - ACWR 0.69: carico acuto sotto quello cronico (scarico o pausa)
 
+## Stato di coaching (aggiornato il 28/10, oggi)
+**Sintomi riferiti:**
+- dal 26/10: fastidio al polpaccio destro, in calo
+
+**Piano 29/10–04/11:**
+- 29/10: corsa facile 40' in Z2
+- 01/11: lungo 80' solo se il polpaccio è a zero
+- Cambiare se: dolore sopra 3/10 in corsa: passare alla bici per due giorni
+
+**Decisioni aperte:** gara di prova (8 nov), sì o no (entro il 04/11)
+
+**Decisioni prese:** 27/10 alla mezza con le scarpe da allenamento
+
 ## Prontezza (euristica, non è la Training Readiness di Garmin)
 **93/100 – alta.** HRV 58 ms, stato bilanciato (intervallo 56–70); sonno punteggio 84; Body Battery al risveglio 85; FC a riposo -1 bpm sulla media 7 giorni; forma (TSB) +9% del carico cronico.
 

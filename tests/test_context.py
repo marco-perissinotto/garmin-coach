@@ -12,7 +12,8 @@ from fakes import FakeClock, FakeGarmin
 from garmin_coach.athlete import load_inputs
 from garmin_coach.context import builder, fmt, render
 from garmin_coach.garmin.endpoints import REFRESH_TIERS, Tier
-from garmin_coach.settings import Paths, Settings
+from garmin_coach.settings import STATE_FILE, Paths, Settings
+from garmin_coach.state import CoachingState, save_state
 from garmin_coach.sync.freshness import FreshnessGate
 from garmin_coach.sync.runner import Runner
 
@@ -35,6 +36,40 @@ EVENTS = """events:
   - {name: "Test Half", date: 2026-11-08, sport: running, distance_km: 21.1, goal: "sub 1:35", priority: B}
   - {name: "Test 70.3", date: 2027-04-24, sport: triathlon, distance_km: 113, priority: A}
 """
+# Placeholder coaching state as of the fake clock's day (2026-10-28), written by hand with an explicit `updated`.
+STATE = """updated: 2026-10-28T09:30:00+01:00
+updated_by: coach
+symptoms:
+  - {text: "fastidio al polpaccio destro, in calo", since: 2026-10-26, noted: 2026-10-28}
+plan:
+  from: 2026-10-29
+  to: 2026-11-04
+  days:
+    - {date: 2026-10-29, session: corsa facile 40' in Z2}
+    - {date: 2026-11-01, session: lungo 80' solo se il polpaccio è a zero}
+  change_if: ["dolore sopra 3/10 in corsa: passare alla bici per due giorni"]
+decisions:
+  open:
+    - {question: "gara di prova (8 nov), sì o no", decide_by: 2026-11-04, noted: 2026-10-28}
+  taken:
+    - {text: alla mezza con le scarpe da allenamento, date: 2026-10-27}
+"""
+STALE_STATE = """updated: 2026-10-19T20:00:00+02:00
+updated_by: coach
+symptoms:
+  - {text: fastidio al polpaccio destro, since: 2026-10-17}
+plan:
+  days:
+    - {date: 2026-10-25, session: lungo 70'}
+decisions:
+  open:
+    - {question: "gara di prova, sì o no", decide_by: 2026-10-28}
+    - {question: "scarpe nuove, quali", decide_by: 2026-10-26}
+"""
+
+
+def write_state(paths: Paths, text: str = STATE) -> None:
+    (paths.config_dir / STATE_FILE).write_text(text, encoding="utf-8")
 
 
 def write_inputs(paths: Paths) -> None:
@@ -96,6 +131,7 @@ def test_empty_cache_renders_explicit_no_data(paths: Paths, settings: Settings, 
                  "Nessun evento in programma", "Storico non ancora caricato"):
         assert line in daily, line
     assert "File personali:" in daily  # missing athlete.yaml etc. are reported, not hidden
+    assert "## Stato di coaching\n_Nessuno stato di coaching registrato._" in daily
     assert "nessuna attività in cache" in texts["activities-recent"]
     assert "_history.md non presente" in texts["athlete"]
 
@@ -169,7 +205,9 @@ def test_flags(full, paths: Paths, settings: Settings, clock: FakeClock) -> None
 
 
 def test_golden_daily_brief(full, paths: Paths, settings: Settings, clock: FakeClock) -> None:  # type: ignore[no-untyped-def]
-    """Snapshot of the daily brief from the fixture DB (the 'Generato' line depends on the local time zone)."""
+    """Snapshot of the daily brief from the fixture DB with a coaching state (the 'Generato' line depends on the
+    local time zone)."""
+    write_state(paths)
     _, texts = render.build_and_render(full, paths, settings, clock=clock, write=False, names=("daily-brief",))
     body = "\n".join(line for line in texts["daily-brief"].splitlines() if not line.startswith("_Generato"))
     golden = GOLDEN / "daily-brief.md"
@@ -177,6 +215,62 @@ def test_golden_daily_brief(full, paths: Paths, settings: Settings, clock: FakeC
         golden.parent.mkdir(exist_ok=True)
         golden.write_text(body + "\n", encoding="utf-8")
     assert body + "\n" == golden.read_text(encoding="utf-8")
+    assert body.index("## Segnali") < body.index("## Stato di coaching (aggiornato il 28/10, oggi)") < body.index(
+        "## Prontezza")
+    assert "- dal 26/10: fastidio al polpaccio destro, in calo" in body and "**Piano 29/10–04/11:**" in body
+    assert "(entro il 04/11)" in body and "**Decisioni prese:** 27/10 alla mezza" in body
+
+
+def test_stale_state_heading_and_flags(full, paths: Paths, settings: Settings, clock: FakeClock) -> None:  # type: ignore[no-untyped-def]
+    write_state(paths, STALE_STATE)
+    pack, texts = render.build_and_render(full, paths, settings, clock=clock, write=False, names=("daily-brief",))
+    daily = texts["daily-brief"]
+    assert "## Stato di coaching (aggiornato il 19/10, 9 giorni fa: da confermare)" in daily
+    assert "**Piano 25/10–25/10:**" in daily  # no from/to written by hand: the plan days give the window
+    flags = pack.flags
+    assert "Stato di coaching vecchio di 9 giorni: confermare sintomi, piano e decisioni prima di usarli" in flags
+    assert "Piano scaduto il 25/10: serve un nuovo piano" in flags
+    assert "Decisione in sospeso entro oggi: gara di prova, sì o no" in flags
+    assert "Decisione in sospeso scaduta il 26/10: scarpe nuove, quali" in flags
+    assert pack.coaching_state and pack.coaching_state["stale"] and pack.coaching_state["age_days"] == 9
+
+
+def test_unreadable_state_is_reported(full, paths: Paths, settings: Settings, clock: FakeClock) -> None:  # type: ignore[no-untyped-def]
+    write_state(paths, "symptoms: [unclosed")
+    pack, texts = render.build_and_render(full, paths, settings, clock=clock, write=False, names=("daily-brief",))
+    assert "Stato di coaching non leggibile" in texts["daily-brief"]
+    assert any(f.startswith("File personali: coaching-state.yaml non valido") for f in pack.flags)
+
+
+def test_full_state_fits_the_daily_budget(full, paths: Paths, settings: Settings, clock: FakeClock) -> None:  # type: ignore[no-untyped-def]
+    """A state near the 4 000-character file cap still keeps the daily brief within its (raised) token budget."""
+    today = clock().astimezone().date()
+    words = "corsa facile in Z2 con allunghi finali e controllo del dolore al polpaccio destro "
+    state = CoachingState.model_validate({
+        "symptoms": [{"text": f"{i} {words}" * 2, "since": today} for i in range(6)],
+        "plan": {"days": [{"date": today + timedelta(days=i), "session": f"{i} {words}"} for i in range(12)],
+                 "change_if": [words] * 3},
+        "decisions": {"open": [{"question": words, "decide_by": today}] * 2, "taken": [{"text": words}] * 2},
+    })
+    save_state(paths, state, clock())
+    assert len((paths.config_dir / STATE_FILE).read_text(encoding="utf-8")) > 3500
+    _, texts = render.build_and_render(full, paths, settings, clock=clock, write=False, names=("daily-brief",))
+    assert fmt.approx_tokens(texts["daily-brief"]) <= settings.context.daily_token_budget
+
+
+def test_state_write_does_not_change_the_metrics_fingerprint(full, paths: Paths, clock: FakeClock) -> None:  # type: ignore[no-untyped-def]
+    inp = load_inputs(paths)
+    today = clock().astimezone().date()
+    assert builder.ensure_metrics(full, inp, today, builder.inputs_mtime(paths.config_dir)) is True
+    before = builder.inputs_mtime(paths.config_dir)
+    write_state(paths)
+    later = time.time() + 120
+    for name in (STATE_FILE, "history.md", "coach-notes.md"):
+        os.utime(paths.config_dir / name, (later, later))
+    assert builder.inputs_mtime(paths.config_dir) == before
+    assert builder.ensure_metrics(full, inp, today, builder.inputs_mtime(paths.config_dir)) is False  # no recompute
+    os.utime(paths.config_dir / "athlete.yaml", (later + 60, later + 60))
+    assert builder.ensure_metrics(full, inp, today, builder.inputs_mtime(paths.config_dir)) is True
 
 
 def test_export_zip(full, paths: Paths, settings: Settings, clock: FakeClock) -> None:  # type: ignore[no-untyped-def]

@@ -73,14 +73,29 @@ def test_progress_is_monotonic_and_visible(paths, settings, clock) -> None:  # t
 
 def test_partial_backfill_resumes_without_refetch(paths, settings, clock) -> None:  # type: ignore[no-untyped-def]
     settings.sync.backfill_budget_calls = 50
-    f1 = JobFetchers(budget=50)
+    release = threading.Event()
+
+    class GatedFetchers(JobFetchers):
+        """The continuation job's first call waits until the test has cancelled it: the worker may pick the job up
+        before the test reaches it (seen on fast Linux runners), so it can be either queued or running."""
+
+        def __call__(self, kind: str) -> FakeGarmin:
+            f = super().__call__(kind)
+            if len(self.made) > 1:
+                f.errors["*"] = lambda args: release.wait(10)
+            return f
+
+    f1 = GatedFetchers(budget=50)
     m = manager(paths, settings, clock, f1)
     first = m.wait(startup_check(m, settings, clock=clock), timeout=60)  # type: ignore[arg-type]
     assert first["status"] == "partial"
-    # The continuation job is queued; simulate the process dying before it runs (cancel it), then a new
+    # A continuation job was enqueued; simulate the process dying before it completes (cancel it), then a new
     # process start must resume the partial history without refetching.
     cont = m.has_active(kind="backfill")
-    assert cont is not None and jobs_mod.request_cancel(m.conn, cont["id"]) == "cancelled"
+    assert cont is not None
+    assert jobs_mod.request_cancel(m.conn, cont["id"]) in ("cancelled", "cancel requested")
+    release.set()
+    assert m.wait(cont["id"], timeout=60)["status"] == "cancelled"  # type: ignore[index]
     f2 = JobFetchers()
     m2 = manager(paths, settings, clock, f2)
     jid = startup_check(m2, settings, clock=clock)  # partial backfill -> new backfill job (resume)

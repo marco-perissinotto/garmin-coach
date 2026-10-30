@@ -16,6 +16,7 @@ HOME_ENV_VAR = "GARMIN_COACH_HOME"
 
 CONFIG_FILES = ("athlete.yaml", "events.yaml")
 KNOWLEDGE_FILES = ("history.md", "coach-notes.md")
+STATE_FILE = "coaching-state.yaml"  # optional short-term coaching state (PLAN §11.3), not a required input
 
 
 @dataclass(frozen=True)
@@ -108,9 +109,10 @@ class OptionalEndpoints(_Model):
 
 
 class ContextSettings(_Model):
-    daily_token_budget: int = 2500
+    daily_token_budget: int = 3500  # includes the coaching state (~1 000 tokens at most, D-062)
     weekly_token_budget: int = 6000
     recent_activities: int = 10
+    state_stale_days: int = 7  # a coaching state older than this is flagged and must be confirmed (D-063)
 
 
 class Settings(_Model):

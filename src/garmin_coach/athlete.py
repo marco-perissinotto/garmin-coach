@@ -1,4 +1,5 @@
-"""The owner's manual inputs: athlete.yaml, events.yaml, history.md, coach-notes.md (PLAN §11).
+"""The owner's manual inputs: athlete.yaml, events.yaml, history.md, coach-notes.md and the optional
+coaching-state.yaml (PLAN §11).
 
 Loading never raises: a missing or invalid file becomes an entry in ``Inputs.problems`` so packs and tools can say so.
 """
@@ -14,6 +15,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .settings import Paths
+from .state import CoachingState, load_state
 
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
@@ -81,6 +83,7 @@ class Inputs:
     events: list[Event] = field(default_factory=list)
     history_md: str | None = None
     coach_notes_md: str | None = None
+    state: CoachingState | None = None
     problems: list[str] = field(default_factory=list)
 
 
@@ -103,7 +106,8 @@ def _read_text(path: Path, problems: list[str]) -> str | None:
     return text or None
 
 
-def load_inputs(paths: Paths) -> Inputs:
+def load_inputs(paths: Paths, today: date | None = None) -> Inputs:
+    """``today`` (from the injectable clock) enables the coaching-state date rules that cannot expire with time."""
     inp = Inputs()
     cfg = paths.config_dir
     data = _read_yaml(cfg / "athlete.yaml", inp.problems)
@@ -122,4 +126,6 @@ def load_inputs(paths: Paths) -> Inputs:
     inp.events.sort(key=lambda e: e.date)
     inp.history_md = _read_text(cfg / "history.md", inp.problems)
     inp.coach_notes_md = _read_text(cfg / "coach-notes.md", inp.problems)
+    inp.state, state_problems = load_state(paths, today)
+    inp.problems += state_problems
     return inp

@@ -34,6 +34,7 @@ events.yaml
 settings.yaml
 history.md
 coach-notes.md
+coaching-state.yaml
 
 # --- Claude Code: personal settings stay local (.mcp.json and .claude/skills are versioned)
 .claude/settings.local.json

@@ -11,12 +11,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .. import state as state_m
 from ..athlete import WEEKDAYS, Inputs
 from ..clock import Clock, local_today, system_clock
 from ..garmin.endpoints import REFRESH_TIERS
 from ..metrics import compute, fitness, recovery, sport
 from ..metrics import events as events_m
 from ..metrics import load as load_m
+from ..settings import STATE_FILE
 from ..store import repo
 from ..sync.jobs import active_jobs
 from . import fmt
@@ -41,6 +43,7 @@ class ContextPack(BaseModel):
     athlete: dict[str, Any] = Field(default_factory=dict)
     history_md: str | None = None
     coach_notes_md: str | None = None
+    coaching_state: dict[str, Any] | None = None  # get_coaching_state's object; None = omitted (past-date brief)
     readiness: dict[str, Any] | None = None
     sleep: dict[str, Any] | None = None
     hrv: dict[str, Any] | None = None
@@ -140,13 +143,18 @@ def _short(acts: list[dict[str, Any]]) -> str:
 
 # -- build ----------------------------------------------------------------------------------------------------
 def build(conn: sqlite3.Connection, inputs: Inputs, *, clock: Clock = system_clock,
-          freshness: Any | None = None, recent_n: int = 10) -> ContextPack:
+          freshness: Any | None = None, recent_n: int = 10, include_state: bool = True,
+          state_stale_days: int = 7) -> ContextPack:
+    """``include_state`` False leaves the coaching state out: it is current, not historical (past-date briefs)."""
     now = clock()
     today = local_today(now)
     yesterday = today - timedelta(days=1)
     pack = ContextPack(generated=now.astimezone().strftime("%Y-%m-%d %H:%M"), today=today.isoformat(),
                        problems=list(inputs.problems), history_md=inputs.history_md,
                        coach_notes_md=inputs.coach_notes_md)
+    if include_state:
+        pack.coaching_state = state_m.view(inputs.state, [p for p in inputs.problems if p.startswith(STATE_FILE)],
+                                           today, state_stale_days)
 
     # header: cache ages, stale flag, history loading
     states = repo.tier_states(conn)
@@ -356,6 +364,20 @@ def _flags(pack: ContextPack) -> None:
         if e["days"] <= 7:
             when = "oggi" if e["days"] == 0 else "domani" if e["days"] == 1 else f"tra {e['days']} giorni"
             f.append(f"Gara {when}: {e['name']} (priorità {e.get('priority') or '–'})")
+    cs = pack.coaching_state
+    if cs and cs.get("state") is not None:
+        if cs["stale"]:
+            f.append(f"Stato di coaching vecchio di {cs['age_days']} giorni: confermare sintomi, piano e decisioni "
+                     "prima di usarli")
+        if cs["plan_expired"]:
+            plan = cs["state"]["plan"] or {}
+            end = plan.get("to") or max((d["date"] for d in plan.get("days", [])), default=None)
+            f.append(f"Piano scaduto il {fmt.ddmm(end)}: serve un nuovo piano")
+        today = date.fromisoformat(pack.today)
+        for d in cs["decisions_due"]:
+            due = date.fromisoformat(d["decide_by"])
+            when = "entro oggi" if due == today else f"scaduta il {fmt.ddmm(due)}"
+            f.append(f"Decisione in sospeso {when}: {d['question']}")
     if pack.problems:
         f.append("File personali: " + "; ".join(pack.problems))
 
@@ -387,12 +409,19 @@ def _weeks(acts: list[dict[str, Any]], metrics: dict[str, dict[str, Any]], today
     return out
 
 
+METRICS_INPUTS = ("athlete.yaml", "events.yaml")  # the owner's files the metrics depend on (D-065)
+
+
 def inputs_mtime(paths_config: Any) -> float:
-    """Latest modification time of the owner's files (the metrics depend on athlete.yaml)."""
-    try:
-        return max((p.stat().st_mtime for p in paths_config.glob("*") if p.is_file()), default=0.0)
-    except OSError:
-        return 0.0
+    """Latest modification time of athlete.yaml and events.yaml, part of the metrics fingerprint. The coaching state
+    and the Markdown files are left out: writing them must not force a metrics recompute (D-065)."""
+    mtimes = []
+    for name in METRICS_INPUTS:
+        try:
+            mtimes.append((paths_config / name).stat().st_mtime)
+        except OSError:
+            continue
+    return max(mtimes, default=0.0)
 
 
 def now_local(clock: Clock = system_clock) -> datetime:

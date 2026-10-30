@@ -95,12 +95,15 @@ Cosa trova Claude nel server:
 - **Strumenti:** `get_daily_brief`, `get_athlete_profile`, `get_events`, `get_context_pack`, `get_range_summary`,
   `get_training_load`, `list_activities`, `get_activity`, `get_sleep`, `get_hrv`, `get_body_battery`,
   `get_heart_rate`, `get_weight`, `get_hr_zones`, `get_sync_status`, `refresh` ("ho appena sincronizzato
-  l'orologio"), `cancel_job` e `append_coach_note`, l'unico che scrive: aggiunge una regola concordata a
-  `coach-notes.md`. Ogni risposta con dati Garmin contiene un oggetto `freshness` con l'età dei dati.
+  l'orologio"), `cancel_job`, `append_coach_note`, che aggiunge una regola concordata a `coach-notes.md`, e
+  `get_coaching_state` / `update_coaching_state`, che leggono e aggiornano per sezioni `coaching-state.yaml`.
+  `append_coach_note` e `update_coaching_state` sono gli unici che scrivono, e solo nei tuoi file locali: nessuno
+  scrive verso Garmin. Ogni risposta con dati Garmin contiene un oggetto `freshness` con l'età dei dati.
 - **Prompt:** `daily_checkin`, `weekly_review`, `plan_week`, `race_readiness`, `explain_metric`. Ognuno include già i
   pack che servono.
-- **Risorse:** i pack (`garmin-coach://context/daily-brief`, `last-7d`, `last-28d`, `athlete`, `events`), la storia e
-  le regole (`garmin-coach://knowledge/history`, `.../coach-notes`) e lo stato (`garmin-coach://status`).
+- **Risorse:** i pack (`garmin-coach://context/daily-brief`, `last-7d`, `last-28d`, `athlete`, `events`), la storia,
+  le regole e lo stato di coaching (`garmin-coach://knowledge/history`, `.../coach-notes`, `.../coaching-state`) e lo
+  stato della cache (`garmin-coach://status`).
 
 ## Dove stanno i dati
 
@@ -122,6 +125,7 @@ Vanno nella cartella `<dati>/config/`. I modelli sono in [config/](config/):
 | `events.yaml` | Le gare in programma: data, sport, distanza, obiettivo, priorità |
 | `history.md` | La storia atletica che Garmin non può sapere: infortuni, cosa ha funzionato, gare passate |
 | `coach-notes.md` | Le regole di coaching concordate, una riga per regola con la data |
+| `coaching-state.yaml` | Opzionale, lo scrive il coach: lo stato attuale (sintomi riferiti, piano dei prossimi giorni con le condizioni che lo cambiano, decisioni aperte e prese). Si sovrascrive, non è un diario; si può correggere a mano |
 | `settings.yaml` | Opzionale: scadenze della cache, ritmo delle chiamate, giorni di storico da caricare |
 
 Questa cartella è l'unica cosa da copiare tra un computer e l'altro: ogni computer tiene la propria cache e la
@@ -152,7 +156,7 @@ Markdown (più `context.json` con gli stessi dati strutturati):
 
 | Pack | Contenuto |
 |---|---|
-| `daily-brief.md` | Oggi: segnali di attenzione, prontezza (euristica) con motivazioni, sonno, HRV, FC a riposo, Body Battery, attività di oggi e ieri, carico (ATL/CTL/TSB/ACWR), prossime gare |
+| `daily-brief.md` | Oggi: segnali di attenzione, stato di coaching (sintomi riferiti, piano concordato, decisioni aperte, con la data dell'ultimo aggiornamento; segnalato da confermare se ha più di 7 giorni), prontezza (euristica) con motivazioni, sonno, HRV, FC a riposo, Body Battery, attività di oggi e ieri, carico (ATL/CTL/TSB/ACWR), prossime gare |
 | `athlete.md` | Profilo, soglie e zone, disponibilità, vincoli, più `history.md` e `coach-notes.md` per intero |
 | `events.md` | Gare in programma con giorni mancanti e fase di preparazione |
 | `last-7d.md`, `last-28d.md` | Tabelle giorno per giorno, settimane per sport, tempo in zona, indicatori di efficienza, potenze di picco, peso |

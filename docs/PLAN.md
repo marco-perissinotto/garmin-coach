@@ -189,6 +189,7 @@ garmin-coach/
 │   ├── events.example.yaml
 │   ├── history.example.md      # template for the athlete's narrative history (§11.2)
 │   ├── coach-notes.example.md  # template for coaching rules learned so far (§11.2)
+│   ├── coaching-state.example.yaml  # template for the short-term coaching state (§11.3)
 │   └── settings.example.yaml
 ├── .mcp.json                   # project-scoped MCP registration for Claude Code (uses `uv run --project .`)
 ├── .claude/skills/coach/SKILL.md   # Claude Code skill: "/coach" → daily check-in workflow using the MCP tools
@@ -204,6 +205,7 @@ garmin-coach/
 │   ├── install.py              # `garmin-coach install claude-desktop|claude-code`: writes the client config with absolute paths
 │   ├── settings.py             # paths (platformdirs), config loading, env overrides
 │   ├── secrets.py              # key resolution (official resolve_api_key) + redaction helpers
+│   ├── state.py                # coaching-state.yaml: schema, limits, load (never raises), atomic save (§11.3)
 │   ├── garmin/
 │   │   ├── client.py           # thin wrapper around official client: retries, backoff, budget, chunking
 │   │   ├── endpoints.py        # the 26 endpoints as enum/dataclass with caps and tiers (from §3)
@@ -555,7 +557,9 @@ Rendered by `context build` into `<app data>/context/`; also served by MCP as re
    A/B/C; computed: days-to-go, phase, suggested focus.
 3. **`daily-brief.md`** — *today*: last night's sleep (score, duration, stages), HRV (last night vs baseline, status),
    RHR and delta, Body Battery at wake, stress yesterday, yesterday's activities (type, duration, load, TE, avg HR/power,
-   pace), ATL/CTL/TSB/ACWR, readiness heuristic with reasons, one-line "flags" (e.g. "HRV below baseline 3 days", "ACWR 1.6").
+   pace), ATL/CTL/TSB/ACWR, readiness heuristic with reasons, one-line "flags" (e.g. "HRV below baseline 3 days", "ACWR 1.6"),
+   and the current coaching state (reported symptoms, agreed plan, open decisions) with its age, flagged when older
+   than 7 days (§11.3; left out of briefs built for a past date).
 4. **`last-7d.md`** and **`last-28d.md`** — tables: per-day load/sleep/HRV/RHR/BB; per-week totals by sport (time, km, load,
    elevation); zone distribution; VO2max/threshold trend; weight trend.
 5. **`activities-recent.md`** — last 10 activities, one row each, with the key numbers and split highlights.
@@ -584,7 +588,8 @@ and, when applicable, `⚠ Served stale: <reason>` so the assistant can tell the
 - Tools (all return JSON; keep payloads small, paginate):
   - `get_daily_brief(date?, max_age_minutes?)`, `get_context_pack(name, max_age_minutes?)`, `get_events()`
   - `get_athlete_profile(sections?: ["profile","zones","history","coach_notes"])` → `athlete.yaml` + auto fields + `history.md` + `coach-notes.md` (all by default)
-  - `append_coach_note(text)` → the **only** write tool; appends a dated line to `coach-notes.md` so the coach can record an agreement ("from now on long run on Saturdays") that persists across chats. Local file only, never touches Garmin.
+  - `append_coach_note(text)` → writes only to `coach-notes.md`: appends a dated line so the coach can record an agreement ("from now on long run on Saturdays") that persists across chats. Local file only, never touches Garmin.
+  - `get_coaching_state()` and `update_coaching_state(symptoms?, plan?, decisions?, confirm?)` → the short-term state of §11.3; the second write tool, local file only, per-section replace (an omitted section is kept, an empty one cleared, `confirm=true` re-dates an unchanged state). Neither touches Garmin nor returns `freshness`. `get_daily_brief` embeds the same object as `coaching_state`.
   - `get_range_summary(start, end, granularity=day|week, max_age_minutes?)`
   - `list_activities(start?, end?, type?, limit=20, max_age_minutes?)`, `get_activity(activity_id, include_splits=false)`
   - `get_training_load(start, end, max_age_minutes?)` → load/ATL/CTL/TSB/ACWR series
@@ -595,7 +600,8 @@ and, when applicable, `⚠ Served stale: <reason>` so the assistant can tell the
   - `cancel_job(job_id)`
 - On server start the §6.6 startup check runs **before** the first request is served; it never blocks the server, it only enqueues.
 - Resources: `garmin-coach://context/daily-brief`, `.../last-7d`, `.../last-28d`, `.../athlete`, `.../events`,
-  `garmin-coach://knowledge/history`, `garmin-coach://knowledge/coach-notes`, `garmin-coach://status`.
+  `garmin-coach://knowledge/history`, `garmin-coach://knowledge/coach-notes`, `garmin-coach://knowledge/coaching-state`
+  (YAML), `garmin-coach://status`.
 - Prompts (these are the "skills" the owner will invoke from Claude): `daily_checkin` (brief + profile + events →
   today's session), `weekly_review` (last-7d + last-28d → what went well, what to change next week), `plan_week`
   (events + load + availability → next 7 days), `race_readiness(event)` (phase, taper, predicted form), `explain_metric(name)`.
@@ -686,7 +692,7 @@ sync:
   cooldown_minutes: {rate_limit: 120, network_error: 10}
   download_fit: false
 optional_endpoints: {nutrition: false, womens_health: false, hydration: true, spo2: true}
-context: {daily_token_budget: 2500, weekly_token_budget: 6000, recent_activities: 10}
+context: {daily_token_budget: 3500, weekly_token_budget: 6000, recent_activities: 10, state_stale_days: 7}
 ```
 
 ### 11.2 Narrative knowledge (Markdown) and the one-time knowledge transfer
@@ -725,6 +731,43 @@ conversation and save the answer into the two files above and into `athlete.yaml
 
 The implementer ships `config/history.example.md` and `config/coach-notes.example.md` matching the structure above, and
 `doctor` reports whether the real files exist.
+
+### 11.3 Short-term coaching state (`coaching-state.yaml`)
+
+Between two chats the coach otherwise keeps only the Garmin cache and the durable rules of `coach-notes.md`. The
+short-lived part of a conversation (symptoms the athlete reported, the plan agreed for the next days, decisions still
+open) lives in `<app data>/config/coaching-state.yaml` (D-060..D-066). It is **not a diary**: only what is true now,
+overwritten per section by `update_coaching_state` (§9) or by hand; durable rules go to `coach-notes.md`, Garmin values
+stay in Garmin, sessions already done are not recorded. Optional: no file means no state, not a problem.
+
+```yaml
+updated: 2026-10-30T18:42:11+01:00   # set by the tool (local time); hand edits may leave it out (file mtime is used)
+updated_by: coach                    # coach | owner
+symptoms:                            # what the athlete REPORTED, never measured values
+  - {text: "left hamstring pain, easing for three days", since: 2026-10-26, noted: 2026-10-30}
+plan:                                # what is SCHEDULED and when it changes
+  from: 2026-10-31
+  to: 2026-11-06                     # default: the last plan day
+  days:
+    - {date: 2026-10-31, session: "easy run 45' in Z2"}
+  change_if: ["pain above 3/10 while running: stop and switch to the bike for two days"]
+decisions:
+  open:  [{question: "race B, yes or no", decide_by: 2026-11-04, noted: 2026-10-30}]
+  taken: [{text: "race A in training shoes", date: 2026-10-30}]
+```
+
+- Limits: 3–300 characters per text field; 8 symptoms, 14 plan days, 8 `change_if`, 8 open and 10 taken decisions;
+  4 000 characters for the whole file (≈ 1 000 tokens, what keeps the daily brief within its budget).
+- Dates: `since`, `noted` and taken `date` not in the future; `plan.days[].date`, `plan.to` and `decide_by` within
+  today − 7 .. today + 90 when written (only the "not in the future / + 90" part is checked again on read).
+- Defaults filled on write: `noted` and taken `date` = today, `plan.to` = last plan day; a plan with neither days nor
+  conditions is absent. Every text is whitespace-collapsed and redacted; the file is written atomically with a fixed
+  header comment (other comments are not kept).
+- Derived on read: `age_days`, `stale` (> `context.state_stale_days`, default 7), `plan_expired`, `decisions_due`.
+- Loading never raises: an unreadable file is reported under "File personali" and a partial update refuses to
+  overwrite it (passing all three sections replaces it). Writing the state never invalidates the metrics: their
+  fingerprint looks only at `athlete.yaml` and `events.yaml`.
+- `config/coaching-state.example.yaml` is the versioned template; `.gitignore` excludes the real file.
 
 ---
 
@@ -773,6 +816,13 @@ The implementer ships `config/history.example.md` and `config/coach-notes.exampl
 1b. `garmin-coach build-mcpb` → `garmin-coach.mcpb` for one-click install in Claude Desktop (§9.1).
 2. Key-expiry reminder: `status`, `get_sync_status` and the daily brief warn when key age (stored at `doctor` time in the app data dir) > 350 days.
 3. Latency check: measure the synchronous A+B refresh on both machines; if it regularly exceeds ~10 s, lower `limit` on the activity search or move the per-activity detail calls to the background tier.
+4. Coaching state (§11.3, D-060..D-066) — **implemented 2026-10-30**: `state.py` + `get_coaching_state` /
+   `update_coaching_state` + resource + "Stato di coaching" section and flags in the daily brief + SKILL.md (including
+   the one-off migration from state-like lines in `coach-notes.md`) + `config/coaching-state.example.yaml` + `doctor`
+   check + `.gitignore` + tests. Still to do by the owner: the live acceptance below. Accept: in two consecutive Claude
+   Code chats, a symptom reported and a plan agreed in the first are quoted by the coach in the second without the
+   owner repeating them; a state older than 7 days is flagged and the coach asks for confirmation before using it;
+   `git status` stays clean after an update; no Garmin call is made by either tool (`get_sync_status` confirms).
 
 **Accept:** both machines answer the daily check-in from Claude Desktop for 48 h with no manual sync; `status` shows refreshes only at times the owner actually asked something; no file under OneDrive/iCloud changed.
 
@@ -798,6 +848,9 @@ The implementer ships `config/history.example.md` and `config/coach-notes.exampl
   a `running` row with a stale heartbeat is marked orphaned and resumed; budget hit → `partial` → resume fetches only the
   missing slices; `cancel` stops between calls; progress fields advance monotonically.
 - Redaction test: feed the logger a fake `GCDC_…` string and assert the handler output masks it.
+- Coaching state tests: round trip, loading never raises, defaults, limits and date rules, per-section replace and
+  `confirm`, refused partial update of an unreadable file, lock under concurrent updates, stale boundary (7 vs 8 days),
+  brief section and flags (golden), past-date brief without the state, metrics fingerprint unaffected by a state write.
 
 ---
 

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import yaml
 
+from .clock import Clock, local_today, system_clock
 from .garmin import endpoints as ep
 from .garmin.client import GarminClient, GarminError
 from .secrets import key_file_status, redact
-from .settings import CONFIG_FILES, KNOWLEDGE_FILES, Paths, Settings, is_cloud_synced
+from .settings import CONFIG_FILES, KNOWLEDGE_FILES, STATE_FILE, Paths, Settings, is_cloud_synced
+from .state import derived, load_state
 from .store import db, repo
 
 KNOWLEDGE_TOKEN_WARN = 3000
@@ -30,7 +33,8 @@ def _approx_tokens(text: str) -> int:
 
 
 def run_doctor(paths: Paths, settings: Settings, *, repo_root: Path, online: bool = True,
-               client_factory: Callable[[], GarminClient] | None = None) -> tuple[list[Check], str]:
+               client_factory: Callable[[], GarminClient] | None = None,
+               clock: Clock = system_clock) -> tuple[list[Check], str]:
     checks: list[Check] = []
 
     checks.append(Check("repo location", not is_cloud_synced(repo_root),
@@ -106,6 +110,8 @@ def run_doctor(paths: Paths, settings: Settings, *, repo_root: Path, online: boo
         else:
             checks.append(Check(name, True, f"{p} (~{tokens} tokens)"))
 
+    checks.append(_state_check(paths, settings, local_today(clock())))
+
     failed = [c for c in checks if not c.ok and c.critical]
     if any(c.name == "API key" for c in failed):
         nxt = "create the key file, then run: garmin-coach doctor"
@@ -122,3 +128,22 @@ def run_doctor(paths: Paths, settings: Settings, *, repo_root: Path, online: boo
         else:
             nxt = client_step or "garmin-coach status"
     return checks, nxt
+
+
+def _state_check(paths: Paths, settings: Settings, today: date) -> Check:
+    """The optional coaching state: absent is fine, otherwise its age and the same size warning as the knowledge."""
+    p = paths.config_dir / STATE_FILE
+    if not p.exists():
+        return Check(STATE_FILE, True, "none yet (the coach writes it with update_coaching_state)", critical=False)
+    state, problems = load_state(paths, today)
+    if state is None:
+        detail = "; ".join(problems) or "empty file"
+        return Check(STATE_FILE, not problems, f"{p}: {detail}", critical=False)
+    d = derived(state, today, settings.context.state_stale_days)
+    tokens = _approx_tokens(p.read_text(encoding="utf-8"))
+    detail = f"{p} (updated {d['age_days']} days ago by {d['updated_by']}, ~{tokens} tokens"
+    if d["stale"]:
+        detail += f"; older than {d['stale_after_days']} days: the coach will ask to confirm it"
+    if tokens > KNOWLEDGE_TOKEN_WARN:
+        detail += f"; above {KNOWLEDGE_TOKEN_WARN}, consider trimming"
+    return Check(STATE_FILE, True, detail + ")", critical=False)

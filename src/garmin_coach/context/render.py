@@ -47,6 +47,7 @@ def env() -> Environment:
         _env = Environment(loader=PackageLoader("garmin_coach.context", "templates"), trim_blocks=True,
                            lstrip_blocks=True, keep_trailing_newline=True, undefined=StrictUndefined,
                            autoescape=False)  # noqa: S701 - Markdown for an LLM, not HTML
+        _env.filters["ddmm"] = fmt.ddmm
     return _env
 
 
@@ -59,11 +60,12 @@ def build_and_render(conn: sqlite3.Connection, paths: Paths, settings: Settings,
                      freshness: Any | None = None, names: tuple[str, ...] = PACKS,
                      write: bool = True) -> tuple[builder.ContextPack, dict[str, str]]:
     """Recompute metrics if the data changed, build the pack, render ``names`` (and write all packs if ``write``)."""
-    inputs = load_inputs(paths)
     today = local_today(clock())
+    inputs = load_inputs(paths, today)
     builder.ensure_metrics(conn, inputs, today, builder.inputs_mtime(paths.config_dir))
     pack = builder.build(conn, inputs, clock=clock, freshness=freshness,
-                         recent_n=settings.context.recent_activities)
+                         recent_n=settings.context.recent_activities,
+                         state_stale_days=settings.context.state_stale_days)
     texts = {n: render(pack, n) for n in (PACKS if write else names)}
     if write:
         out = paths.context_dir

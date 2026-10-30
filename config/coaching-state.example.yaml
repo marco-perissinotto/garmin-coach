@@ -1,0 +1,30 @@
+# coaching-state.yaml: the CURRENT short-term coaching state, overwritten by the coach (update_coaching_state)
+# or by hand. Not a diary: only what is true now. Durable rules go to coach-notes.md, Garmin data stays in Garmin.
+# Rewritten as a whole on every update: comments other than this header are not kept.
+# Optional: copy to <app data>/config/coaching-state.yaml only to start from an example; the coach creates it.
+# Limits: 300 characters per text, 8 symptoms, 14 plan days, 8 conditions, 8 open / 10 taken decisions,
+# 4 000 characters for the whole file.
+updated: 2026-01-15T18:30:00+01:00   # set by the tool (local time); hand edits may leave it out
+updated_by: coach                    # coach | owner
+symptoms:                            # what the athlete REPORTED, never measured values
+  - text: fastidio al polpaccio destro, in calo da tre giorni
+    since: 2026-01-12
+    noted: 2026-01-15                # default: the day the tool wrote it
+plan:                                # what is SCHEDULED and when it changes
+  from: 2026-01-16
+  to: 2026-01-22
+  days:
+    - date: 2026-01-16
+      session: corsa facile 45' in Z2
+    - date: 2026-01-18
+      session: lungo 90' solo se il polpaccio è a zero
+  change_if:
+    - dolore sopra 3/10 in corsa, fermarsi e passare alla bici per due giorni
+decisions:
+  open:                              # questions still to decide, with a deadline
+    - question: gara B di febbraio, sì o no
+      decide_by: 2026-01-20
+      noted: 2026-01-15
+  taken:                             # decisions already made (short; the rule, if durable, goes to coach-notes.md)
+    - text: alla gara A con le scarpe da allenamento, non quelle da gara
+      date: 2026-01-15

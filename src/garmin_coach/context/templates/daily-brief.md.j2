@@ -8,6 +8,53 @@
 - Nessun segnale di attenzione dai dati.
 {% endfor %}
 
+{% set cs = p.coaching_state %}
+{% if cs is not none %}
+{% if cs.state is none %}
+## Stato di coaching
+{% if cs.get("problems") %}
+_Stato di coaching non leggibile: vedi «File personali» tra i segnali._
+{% else %}
+_Nessuno stato di coaching registrato._
+{% endif %}
+{% else %}
+{% set st = cs.state %}
+## Stato di coaching (aggiornato il {{ cs.updated | ddmm }}, {% if cs.age_days == 0 %}oggi{% elif cs.age_days == 1 %}ieri{% else %}{{ cs.age_days }} giorni fa{% endif %}{% if cs.stale %}: da confermare{% endif %})
+{% if st.symptoms %}
+**Sintomi riferiti:**
+{% for s in st.symptoms %}
+- {% if s.get("since") %}dal {{ s.since | ddmm }}: {% endif %}{{ s.text }}
+{% endfor %}
+
+{% endif %}
+{% if st.plan %}
+{% set pf = st.plan.get("from") or (st.plan.days | map(attribute="date") | min if st.plan.days else none) %}
+{% set pt = st.plan.get("to") or (st.plan.days | map(attribute="date") | max if st.plan.days else none) %}
+**Piano{% if pf and pt %} {{ pf | ddmm }}–{{ pt | ddmm }}{% endif %}:**
+{% for d in st.plan.days %}
+- {{ d.date | ddmm }}: {{ d.session }}
+{% endfor %}
+{% for c in st.plan.change_if %}
+- Cambiare se: {{ c }}
+{% endfor %}
+
+{% endif %}
+{% if st.decisions.open %}
+**Decisioni aperte:** {% for o in st.decisions.open %}{{ o.question }}{% if o.get("decide_by") %} (entro il {{ o.decide_by | ddmm }}){% endif %}{{ "; " if not loop.last }}{% endfor %}
+
+
+{% endif %}
+{% if st.decisions.taken %}
+**Decisioni prese:** {% for t in st.decisions.taken %}{% if t.get("date") %}{{ t.date | ddmm }} {% endif %}{{ t.text }}{{ "; " if not loop.last }}{% endfor %}
+
+
+{% endif %}
+{% if not (st.symptoms or st.plan or st.decisions.open or st.decisions.taken) %}
+Nessun sintomo, piano o decisione registrati.
+{% endif %}
+{% endif %}
+{% endif %}
+
 ## Prontezza (euristica, non è la Training Readiness di Garmin)
 {% if p.readiness and p.readiness.score is not none %}
 **{{ p.readiness.score }}/100 – {{ p.readiness.label }}.** {{ p.readiness.reasons | join("; ") }}.{% if p.readiness.missing %} Mancano: {{ p.readiness.missing | join(", ") }}.{% endif %}

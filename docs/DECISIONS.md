@@ -207,3 +207,52 @@ a random token generated at each start and printed to stderr (never logged).
 MCP SDK, our modules add ~0.1 s. A tool on a fresh cache answers in ~0.05 s; a live forced A+B refresh made 7 calls
 in 4–8 s (the activity search alone took 0.9–4.3 s on Garmin's side). The `daily_checkin` prompt is ~5k tokens with
 a real multi-year account.
+
+## Coaching state (2026-10-30)
+
+**D-060 Short-term state is a separate, overwritable YAML file.** `coach-notes.md` is append-only and for durable
+rules (PLAN §11.2); mixing in symptoms, plans and pending decisions would make the rules file grow with stale facts
+and the skill would have to parse dates to ignore them. `coaching-state.yaml` in the config folder holds the
+*current* state only, with three typed sections (reported symptoms, scheduled plan, decisions open/taken), a
+file-level `updated` timestamp and the same limits/redaction as the note tool. YAML + pydantic because the other
+owner inputs already work that way, because per-section overwrite and typed dates need structure, and because the
+model never reads the raw file (it gets JSON from the tools and Markdown from the brief). Implemented in `state.py`
+(pure, no MCP imports); the schema is in PLAN §11.3.
+
+**D-061 Per-section replace.** `update_coaching_state` replaces the sections it receives and keeps the others; an
+empty section clears it; `confirm=true` bumps the date without changes. Whole-file replace risks silently dropping
+a section the model did not re-read; item-level patching needs ids the model would have to track. A section is at
+most 8–14 short items, cheap to restate. The answer lists the sections written in `changed` (`["confirmed"]` for a
+bare confirmation).
+
+**D-062 The state enters the daily brief, not the profile.** `ContextPack.coaching_state` is the same object
+`get_coaching_state` returns (with `state: null` and a note when there is no file, `state: null` and `problems` when
+the file is unreadable), rendered right after "Segnali" (reported symptoms outrank HRV and sleep); it is `None` only
+in past-date packs, which omit the section and the `get_daily_brief` key. `daily_token_budget` default
+2 500 → 3 500 because a full state is ≈ 1 000 tokens (tested with a state near the 4 000-character cap).
+`get_coaching_state` exists for explicit re-reads; `get_athlete_profile` is unchanged.
+
+**D-063 Stale = older than `context.state_stale_days` (7).** Flagged in the brief and in the tool answer, confirmed
+by the coach with the athlete; never auto-deleted or hidden. `plan_expired` and `decisions_due` are derived on read
+(the plan end is `plan.to`, or the last plan day when a hand edit left `to` out). A due decision is flagged "entro
+oggi" on its deadline and "scaduta il dd/mm" once the deadline has passed. Symptoms older than 28 days are a skill
+rule ("propose moving it to history.md"), not a tool rule.
+
+**D-064 Validation, limits, atomic write.** Same path as `append_coach_note`: whitespace collapse, `redact()`,
+min 3 / max 300 characters per text, item caps per section, 4 000 characters per file; dates ISO within
+today − 7 .. today + 90 (`since`/`noted`/`date` not in the future). Read-modify-write under a lock, temp file +
+`os.replace`, LF line endings, no YAML anchors, the fixed header re-emitted (hand comments are dropped, the header
+says so). A partial update refuses to overwrite a file it cannot parse; passing all three sections replaces it.
+Amendment: the lower bound of the date window (today − 7) applies only to the sections being written. Reading a
+file applies the limits and the rules that cannot expire (not in the future, at most today + 90), so a state kept
+for weeks is flagged stale instead of turning "invalid", and an update of one section never fails because of the
+dates of another. "Today" always comes from the injectable clock (`load_inputs(paths, today)`, `save_state(…, now)`).
+
+**D-065 The metrics fingerprint excludes the state.** `inputs_mtime()` used the newest mtime of every file in
+`config/`, so each state write would have forced a ~0.7 s `metrics_daily` recompute (D-045). It now looks only at
+`athlete.yaml` and `events.yaml` (`builder.METRICS_INPUTS`); edits of the Markdown files no longer trigger it either.
+
+**D-066 Migration is manual and one-off.** When the brief carries no state, the skill tells the coach to propose an
+initial state from state-like lines found in `coach-notes.md`; the owner deletes those lines by hand. The note tool
+stays append-only (no delete surface), there is no DB migration, and `doctor` does not try to classify note lines:
+it only reports the state file as absent ("none yet"), unreadable, or present with its age and size.

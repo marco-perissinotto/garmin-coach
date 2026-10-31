@@ -144,7 +144,7 @@ def _report(job: dict[str, Any]) -> None:
 
 def _follow_chain(a: App, kind: str, tiers: set[Tier], *, quiet: bool) -> dict[str, Any]:
     """Enqueue a job of ``kind`` (or follow the active one) and follow its chain of budget-limited continuations
-    until it ends (D-033, PLAN-FIT D-073). Returns the last job."""
+    until it ends (D-033, D-073). Returns the last job."""
     active = a.jobs.has_active(kind=kind)
     jid = active["id"] if active else a.jobs.enqueue(kind, tiers, "cli")
     if active:
@@ -356,7 +356,7 @@ def jobs_prune(keep: int = 50) -> None:
     err.print(f"deleted {jobs_mod.prune_jobs(a.conn, keep)} job rows")
 
 
-# -- FIT (docs/PLAN-FIT.md §7) -----------------------------------------------------------------------------------
+# -- FIT (docs/FIT.md) -----------------------------------------------------------------------------------
 @fit_cli.command("backfill")
 def fit_backfill(
     days: Annotated[int | None, typer.Option(help="Only activities of the last N days (default fit.backfill_days; "

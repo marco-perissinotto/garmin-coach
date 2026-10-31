@@ -257,9 +257,12 @@ initial state from state-like lines found in `coach-notes.md`; the owner deletes
 stays append-only (no delete surface), there is no DB migration, and `doctor` does not try to classify note lines:
 it only reports the state file as absent ("none yet"), unreadable, or present with its age and size.
 
-## Phase 5a: FIT ingestion (2026-10-31, spec in PLAN-FIT.md)
+## Phase 5a: FIT ingestion (2026-10-31)
 
-**D-070 Storage: ZIP on disk + one JSON column.** As PLAN-FIT §2: the ZIP is the raw layer
+The design document `PLAN-FIT.md` guided the implementation and was removed afterwards, as the coaching-state design
+was: `FIT.md` holds the schema and the ingestion rules, these entries hold the decisions and the deviations.
+
+**D-070 Storage: ZIP on disk + one JSON column.** As designed: the ZIP is the raw layer
 (`<app data>/fit/<activityId>.zip`, kept by default), the summary is `activity_fit.data` (JSON) with scalar columns for
 status and counts; no per-lap/per-record tables; bytes never go to `raw_payload`. Schema v4 adds `activity_fit` and
 `app_flag` without a rebuild (an existing v3 database keeps every row, tested).
@@ -296,13 +299,13 @@ not a sensor. (c) `records.power_source` is omitted instead of `null` (the "neve
 `fit.files_mb` in the status is a float with one decimal. (e) `meta.profile_version` comes from the file header
 (÷1000 from 22.0, ÷100 before, the SDK's rule). No key was renamed or removed.
 
-**D-078 `workout_rpe` is not scaled by the SDK.** PLAN-FIT §5.2 expected the SDK to turn a stored 70 into 7.0; in
+**D-078 `workout_rpe` is not scaled by the SDK.** The design expected the SDK to turn a stored 70 into 7.0; in
 profile 21.218 the field has scale 1, so the SDK returns 70. `session.rpe` = value ÷ 10 when above 10. `feel` is kept
 as stored (0-100: Garmin's five steps 0/25/50/75/100), not mapped to 1-5. To confirm on a real file with an RPE.
 
-**D-079 `fit.store` API: `prepare` + `save`.** PLAN-FIT §4.3 has `ingest` write the file, parse and upsert, and the
+**D-079 `fit.store` API: `prepare` + `save`.** The design had `ingest` write the file, parse and upsert, and the
 runner call it inside `BEGIN IMMEDIATE`. Decoding inside the transaction would hold the SQLite write lock for the
-parse time (seconds for a long ride, PLAN-FIT §5.3), blocking every other writer (the gate of another process). The
+parse time (seconds for a long ride), blocking every other writer (the gate of another process). The
 runner calls `prepare` (write the file, parse; reads only) before `BEGIN` and `save` (row + `has_fit`) inside it,
 with `sync_state`; `ingest` = `prepare` + `save` for the CLI and tests. `hr_zones` is the list of the five zone floors,
 looked up per sport (`RUNNING`/`CYCLING`/`SWIMMING` zones when Garmin has them, else `DEFAULT`). `parser_version` is
@@ -313,13 +316,13 @@ that has its detail but no FIT attempt (1 call), skips the download while tier F
 `detail_problem` and `fit_problem` separately (`fit_status` stays `not_downloaded` after a failed download, which is
 retried on a later request).
 
-**D-081 Yielding without losing the chain.** Three amendments to PLAN-FIT §6.5-6.6, found while writing the job tests:
+**D-081 Yielding without losing the chain.** Three amendments to the designed yield scheme, found while writing the job tests:
 (a) a fit job does not take the lock while `sync_wanted_at` is fresh (it waits, at most 30 s since the flag then goes
 stale), and a fit job that yielded is continued even with 0 calls done: otherwise a continuation that wins the race
 with the gate yields at once and the chain ends. (b) Refresh and backfill jobs that find the lock busy also set the
-flag while they wait (§6.6 says background jobs do not): `fit backfill --background` runs in its own process, so
+flag while they wait (the design said background jobs do not): `fit backfill --background` runs in its own process, so
 without it the MCP server's background C/D/E refresh would fail `locked` during the whole chain. (c) A fit job retries
-the lock up to 10 times with `sync.lock_wait_seconds` each (§6.5 says 5 s apart), i.e. it waits for a background
+the lock up to 10 times with `sync.lock_wait_seconds` each (the design said 5 s apart), i.e. it waits for a background
 refresh of ~60 calls instead of failing `locked`. The flag is cleared by whoever set it; two concurrent waiters may
 clear each other's flag, which only costs a later yield.
 
@@ -329,7 +332,7 @@ field, timer pause, no positions, session-level zones). The sync tests use a 110
 with ~12 downloads stays fast. `FakeGarmin` serves it for `activity.download` (`no_fit_ids` → 404, `bad_zip_ids` →
 random bytes, `gpx_ids` → a ZIP with a `.gpx`).
 
-**D-083 Live findings (PLAN-FIT §12).** To be filled in after the owner's live run: ZIP member naming and the answer
+**D-083 Live findings.** To be filled in after the owner's live run: ZIP member naming and the answer
 for multisport children / manual entries / GPX uploads; whether session TSS, TE and training load peak are present;
 the meaning of `time_in_hr_zone[0]`; the shape of `left_right_balance`; decode time per file; 429 behaviour of a
 100-call fit job at 1.5 s; disk use after the full backfill.

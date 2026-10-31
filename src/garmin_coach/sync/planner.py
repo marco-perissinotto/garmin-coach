@@ -99,7 +99,7 @@ class Planner:
         if st is None:
             return False
         if call.endpoint == "activity.download" and fit_store.attempted(self.conn, int(call.key)):
-            return True  # tried once (a 400 too, PLAN-FIT §6.4); 429/5xx are retried
+            return True  # tried once (a 400 too, D-071); 429/5xx are retried
         if st["last_status"] not in OK_STATUSES:
             return False
         if call.endpoint in FETCHED_ONCE:
@@ -183,7 +183,7 @@ class Planner:
                 self._e_calls(out, Tier.H)
             elif tier == Tier.F:
                 # The whole eligible history, newest first: the job's call budget bounds it and the chain continues
-                # (PLAN-FIT D-073).
+                # (D-073).
                 for aid in fit_store.pending_ids(self.conn, self.settings, t):
                     self._add(out, self._download(aid, Tier.F))
         return out
@@ -230,7 +230,7 @@ class Planner:
                 for name in ("activity.detail", "activity.workouts"):
                     out.append(Call(name, str(aid), {"activity_id": aid}, call.tier, f"{name} {aid} ({start_local})"))
             if start_local >= detail_cutoff and self.wants_fit(dig_type_key(a)):
-                # Tier F: a failed download never leaves tier A or H incomplete (PLAN-FIT D-071).
+                # Tier F: a failed download never leaves tier A or H incomplete (D-071).
                 out.append(self._download(aid, Tier.F, start_local))
         full_page = len(body) >= limit
         if call.tier == Tier.H:

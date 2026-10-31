@@ -2,7 +2,7 @@
 
 The runner does not take the refresh lock; callers (jobs, freshness gate) do. FIT downloads (tier F) wait in a
 second queue that runs only when the main one is empty, so the calls that complete tier A always go first
-(PLAN-FIT §6.4).
+(D-071).
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ class Runner:
     ) -> None:
         """``on_finished`` runs after a run that stored new payloads (metrics + context packs, PLAN §6.2).
         ``paths``: where FIT files are kept (``None``: not kept). ``yield_check``: checked before each call; when
-        true the run stops ``partial`` so an on-demand refresh can take the lock (fit jobs, PLAN-FIT D-073)."""
+        true the run stops ``partial`` so an on-demand refresh can take the lock (fit jobs, D-073)."""
         self.on_finished = on_finished
         self.paths = paths
         self.yield_check = yield_check

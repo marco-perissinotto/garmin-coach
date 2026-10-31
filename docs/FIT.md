@@ -3,7 +3,7 @@
 Every activity that enters the cache also gets its original FIT file: `GET /download-service/files/activity/{id}`
 (endpoint 4 of PLAN §3) returns a ZIP, which is kept under `<app data>/fit/<activityId>.zip` and reduced by
 `garmin_coach.fit.parse` to a compact JSON summary stored in `activity_fit.data`. The MCP tool `get_activity` serves it
-as `fit` (laps and series on request). Design and decisions: [PLAN-FIT.md](PLAN-FIT.md), D-070 onwards in
+as `fit` (laps and series on request). Decisions: D-070 onwards in
 [DECISIONS.md](DECISIONS.md).
 
 ## How files arrive
@@ -110,7 +110,7 @@ offset applied.
 
 Times are whole seconds, the array exactly as the device wrote it. **Index 0**: Garmin devices write one more entry
 than zones (time below zone 1 first); whether index 1-5 equal the activity list's `hrTimeInZone_1..5` is checked live
-(PLAN-FIT §12 item 3, `tests/test_live.py`) and recorded in DECISIONS.md.
+(`tests/test_live.py`, D-083) and recorded in DECISIONS.md.
 
 ### `laps`
 

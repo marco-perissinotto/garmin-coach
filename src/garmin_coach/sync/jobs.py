@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 ACTIVE = ("queued", "running")
 TERMINAL = ("done", "partial", "failed", "cancelled")
 EXIT_CODES = {"done": 0, "partial": 2, "failed": 1, "cancelled": 1}
-CHAINED_KINDS = ("backfill", "fit")  # budget-limited kinds that continue in a new job (D-033, PLAN-FIT D-073)
+CHAINED_KINDS = ("backfill", "fit")  # budget-limited kinds that continue in a new job (D-033, D-073)
 FIT_LOCK_TRIES = 10  # a fit continuation waits for the refresh it yielded to instead of failing 'locked'
 
 FetcherFactory = Callable[[str], Fetcher]  # kind -> fetcher with the right budget
@@ -309,7 +309,7 @@ class JobManager:
         notes = f"http_calls={res.http_calls}"
         # A backfill or fit job that stopped only because of its call budget (or, for fit, because an on-demand
         # refresh wanted the lock) continues in a new job (same trigger), so a long history loads in one go instead
-        # of waiting for the next process start (PLAN §6.2, §6.7, PLAN-FIT D-073). Enqueued *before* this job turns
+        # of waiting for the next process start (PLAN §6.2, §6.7, D-073). Enqueued *before* this job turns
         # terminal, so whoever sees 'partial' also sees the continuation.
         error = res.error or ""
         budget = res.calls_done > 0 and "budget" in error

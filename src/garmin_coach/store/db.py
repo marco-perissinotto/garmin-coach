@@ -33,7 +33,7 @@ MIGRATIONS: list[tuple[str, bool]] = [
         "CREATE TABLE IF NOT EXISTS derived_state (key TEXT PRIMARY KEY, value TEXT);",
         False,
     ),
-    (  # v3 -> v4 (Phase 5a, docs/PLAN-FIT.md §4.1): FIT summaries + process-wide flags; existing rows untouched
+    (  # v3 -> v4 (Phase 5a, docs/FIT.md): FIT summaries + process-wide flags; existing rows untouched
         """
         CREATE TABLE IF NOT EXISTS activity_fit (
           activity_id INTEGER PRIMARY KEY, status TEXT NOT NULL, fetched_at TEXT NOT NULL, parsed_at TEXT,

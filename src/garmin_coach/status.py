@@ -32,7 +32,7 @@ def _eta_seconds(job: dict[str, Any], settings: Settings, clock: Clock) -> int |
 
 def _fit_block(conn: sqlite3.Connection, settings: Settings, paths: Paths, clock: Clock,
                states: dict[str, dict[str, Any]], running: list[dict[str, Any]]) -> dict[str, Any]:
-    """FIT coverage, the F cooldown and the running / last fit job (PLAN-FIT §8.3)."""
+    """FIT coverage, the F cooldown and the running / last fit job (docs/FIT.md)."""
     now = clock()
     out = fit_store.coverage(conn, settings, paths, local_today(now))
     cd = states.get(Tier.F.value, {}).get("cooldown_until")

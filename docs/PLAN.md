@@ -65,7 +65,7 @@
 | Refresh trigger | **On-demand, staleness-driven ("freshness gate", §6.5)** inside the MCP server and the CLI, plus a **startup check (§6.6)** that launches one background job when the cache is empty or stale | No OS scheduler, no daemon, nothing to install on either machine. The cache is refreshed when someone actually asks for data and it is older than its TTL; when the MCP server boots it pre-warms the cache in the background so the first question is already fast. An empty cache triggers the initial backfill automatically. |
 | Agent interface | **MCP server over stdio** (Python `mcp` SDK, `FastMCP`) | Native for Claude Desktop and Claude Code; local, no network. Optional HTTP mode bound to localhost only. |
 | Context format | Markdown "context packs" + JSON | Markdown is what you paste/upload into ChatGPT Projects; JSON is what MCP tools return. |
-| FIT parsing (Phase 5a, `docs/PLAN-FIT.md`) | `garmin-fit-sdk` (official) | Lap/record-level data for interval analysis. |
+| FIT parsing (Phase 5a, `docs/FIT.md`) | `garmin-fit-sdk` (official) | Lap/record-level data for interval analysis. |
 | Multi-machine | Private git repo for code; **each machine keeps its own cache and refreshes independently** | Avoids syncing a SQLite file through a cloud drive; refreshes are idempotent and cheap, and a machine that is not being used makes zero calls. |
 
 ### 1.4 Architecture decision: "local context engine + thin MCP"
@@ -130,7 +130,7 @@ where the spec says nothing, use the conservative value and shrink on `400`.
 | 1 | `/activitylist-service/activities/search/activities` | `start`, `limit`, `startDate`, `endDate`, `sortBy`, `sortOrder`, `activityType`, … | paginated (`limit` ≤ 100 safe) | `search_activities` | Discover new/changed activities; main source of training load, TE, VO2max | **A** TTL 60 min |
 | 2 | `/activity-service/activity/{activityId}` | path | n/a | `get_activity` | Full summary + split summaries for new activities | A (only new IDs) |
 | 3 | `/activity-service/activity/{activityId}/workouts` | path | n/a | `get_activity_workouts` | Structured workout followed (if any) | A (only new IDs) |
-| 4 | `/download-service/files/activity/{activityId}` | path | n/a | `download_activity` (bytes, ZIP) | FIT download, see `PLAN-FIT.md` and `FIT.md` | A follow-up for new IDs as pseudo-tier F; `fit backfill` for the past |
+| 4 | `/download-service/files/activity/{activityId}` | path | n/a | `download_activity` (bytes, ZIP) | FIT download, see `FIT.md` | A follow-up for new IDs as pseudo-tier F; `fit backfill` for the past |
 | 5 | `/usersummary-service/usersummary/daily` | `calendarDate` | 1 day | none → `client.get("/usersummary-service/usersummary/daily", params={"calendarDate": d})` | RHR, 7-day RHR avg, stress durations, Body Battery high/low/wake, steps, intensity minutes for **today & yesterday** | **B** TTL 60 min (2 calls) |
 | 6 | `/usersummary-service/v2/dailysummaries` | `startDate`, `endDate` | 1 year | `get_daily_summaries` | Range backfill and refresh of last 7 days | **C** TTL 24 h + backfill |
 | 7 | `/sleep-service/sleep/dailySleep` | `date` | 1 day | `get_daily_sleep` | Last night in full (stages, score, SpO2, respiration, HRV-ish avg HR, sleep need) | B (today) |
@@ -696,7 +696,7 @@ sync:
   lock_wait_seconds: 15
   heartbeat_stale_seconds: 120   # a 'running' job without heartbeat for this long is treated as orphaned
   cooldown_minutes: {rate_limit: 120, network_error: 10}
-fit:                             # PLAN-FIT §3 (replaces sync.download_fit)
+fit:                             # FIT files, docs/FIT.md (replaces sync.download_fit)
   download: true                 # download + parse the FIT of every new activity during sync
   keep_files: true               # keep <app data>/fit/<activityId>.zip for offline re-parsing
   skip_types: []                 # Garmin typeKeys never downloaded
@@ -842,7 +842,7 @@ decisions:
 
 ### Phase 5 — Optional depth
 - FIT download/parse for new activities: laps, intervals, HR/power time-in-zone computed locally; `get_activity(include_laps=true)`.
-  **Done as Phase 5a** (`PLAN-FIT.md`, schema `FIT.md`, decisions D-070 onwards).
+  **Done as Phase 5a** (`docs/FIT.md`, decisions D-070 onwards).
 - Nutrition / hydration / SpO2 opt-ins in context.
 - `context export --zip` + `--clipboard` for the ChatGPT Project workflow.
 
@@ -875,7 +875,7 @@ decisions:
 3. Does `activityTrainingLoad` populate for all activity types (strength, swim)? If null, the TRIMP fallback is used.
 4. Behaviour of single-day endpoints for days with no data: `404`, `204`, or `200` with nulls?
 5. Does the ZIP from the download endpoint contain the full FIT (VO2max/recovery fields reported stripped on other tiers)?
-   (PLAN-FIT §12 item 2; answer in DECISIONS D-083.)
+   (Answer in DECISIONS D-083.)
 6. Rate limits: record every `429` with timestamp to infer the real budget over the first weeks.
 7. Time zone: `calendarDate` is the user's local day; confirm midnight behaviour for late-night activities and for travel.
 

@@ -248,7 +248,7 @@ def test_server_error_on_wide_window_is_split(conn, settings: Settings, fake: Fa
     assert cap is not None and 7 <= cap <= 200
 
 
-# -- FIT downloads (PLAN-FIT §6) -------------------------------------------------------------------------------------
+# -- FIT downloads (D-071, D-073) -------------------------------------------------------------------------------------
 def new_activity(fake: FakeGarmin, aid: int = 3_000_000, when: str = "2026-10-28 09:00:00",
                  type_key: str = "running") -> None:
     fake.activities.insert(0, dict(fake.activities[0], activityId=aid, startTimeLocal=when,

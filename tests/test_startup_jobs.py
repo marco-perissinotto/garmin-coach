@@ -209,7 +209,7 @@ def test_budget_limited_backfill_chains_until_done(paths, settings, clock) -> No
     assert sum(fg.calls_made for fg in f.made) <= 200
 
 
-# -- fit jobs (PLAN-FIT §6.5-6.6) -------------------------------------------------------------------------------------
+# -- fit jobs (D-073, D-081) -------------------------------------------------------------------------------------
 def warm_without_fit(paths: Paths, settings: Settings, clock: FakeClock) -> int:
     """History loaded with FIT downloads off; returns the number of activities a fit backfill must try."""
     conn = db.connect(paths.db)

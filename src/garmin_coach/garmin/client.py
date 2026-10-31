@@ -148,7 +148,7 @@ class GarminClient:
                 body = " ".join((exc.response_text or "").split())[:200]
             except GarminPersonalApiError:
                 # Not an HTTP error: the only known case is download_activity's "original activity file response
-                # was empty", i.e. no file for this activity (PLAN-FIT §6.2).
+                # was empty", i.e. no file for this activity (docs/FIT.md).
                 self.last_status = 404
                 self.consecutive_429 = 0
                 raise NotFoundError(f"{endpoint.name}: empty response", 404) from None

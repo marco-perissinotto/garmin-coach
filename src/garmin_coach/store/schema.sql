@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS metrics_daily (
   readiness_score INTEGER, readiness_reasons TEXT, vo2max_run REAL, vo2max_bike REAL
 );
 
--- v4 (docs/PLAN-FIT.md §4.1): created by the v3 -> v4 migration in db.py, repeated here for reference.
+-- v4 (docs/FIT.md): created by the v3 -> v4 migration in db.py, repeated here for reference.
 -- One row per download attempt; activity.has_fit = 1 iff status = 'ok'. Not part of the normalized layer.
 CREATE TABLE IF NOT EXISTS activity_fit (
   activity_id INTEGER PRIMARY KEY,

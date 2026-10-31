@@ -216,7 +216,7 @@ def test_get_activity_lazy_detail_does_not_touch_tier_a(warmed, clock: FakeClock
     conn.close()
 
 
-# -- FIT in the tools (PLAN-FIT §8) -----------------------------------------------------------------------------------
+# -- FIT in the tools (docs/FIT.md) -----------------------------------------------------------------------------------
 def _recent_with_fit(svc: CoachService) -> int:
     conn = db.connect(svc.app.paths.db)
     try:

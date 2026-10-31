@@ -148,7 +148,7 @@ def is_cache_empty(conn: sqlite3.Connection) -> bool:
     return not (row and row["last_completed_at"])
 
 
-# -- app_flag: tiny process-wide signals (PLAN-FIT §6.6) -------------------------------------------------------------
+# -- app_flag: tiny process-wide signals (D-081) -------------------------------------------------------------
 # Set by whoever waits for the refresh lock to serve a consumer; fit jobs yield while it is fresh. A flag older than
 # SYNC_WANTED_MAX_AGE_S is ignored, so a crashed process cannot stall the fit jobs.
 SYNC_WANTED = "sync_wanted_at"

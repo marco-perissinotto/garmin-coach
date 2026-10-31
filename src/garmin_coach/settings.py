@@ -101,7 +101,7 @@ class SyncSettings(_Model):
 
 
 class FitSettings(_Model):
-    """FIT download and parsing (docs/PLAN-FIT.md §3). Replaces the old ``sync.download_fit`` (D-076)."""
+    """FIT download and parsing (docs/FIT.md). Replaces the old ``sync.download_fit`` (D-076)."""
 
     download: bool = True  # download + parse the FIT of every new activity during sync (tier A, history)
     keep_files: bool = True  # keep <app data>/fit/<activityId>.zip for offline re-parsing

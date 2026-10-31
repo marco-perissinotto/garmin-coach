@@ -170,7 +170,7 @@ class FreshnessGate:
             # 3-4. synchronous tiers under the lock, with double-check
             if sync_part:
                 lock = RefreshLock(self.paths.lock)
-                # A running fit job yields within one call when it sees this flag (PLAN-FIT §6.6).
+                # A running fit job yields within one call when it sees this flag (D-081).
                 repo.set_flag(self.conn, repo.SYNC_WANTED, iso(self.clock()))
                 try:
                     if lock.acquire(self.settings.sync.lock_wait_seconds):

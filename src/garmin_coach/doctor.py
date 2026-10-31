@@ -134,7 +134,7 @@ def run_doctor(paths: Paths, settings: Settings, *, repo_root: Path, online: boo
 
 
 def _fit_checks(paths: Paths, settings: Settings, today: date) -> list[Check]:
-    """FIT ingestion (PLAN-FIT §7): the SDK, the folder for the kept files, the obsolete setting, the coverage."""
+    """FIT ingestion (docs/FIT.md): the SDK, the folder for the kept files, the obsolete setting, the coverage."""
     from importlib.metadata import PackageNotFoundError, version
 
     from .fit import store as fit_store

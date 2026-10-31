@@ -506,7 +506,7 @@ class CoachService:
         (detail_problem, fit_problem).
 
         Runs with an empty tier set so tier A's freshness is not touched by a single-activity fetch (D-053); sets
-        the ``sync_wanted_at`` flag so a running fit job yields the lock (PLAN-FIT §6.6)."""
+        the ``sync_wanted_at`` flag so a running fit job yields the lock (D-081)."""
         from ..sync.lock import RefreshLock
         from ..sync.planner import Planner
         from ..sync.runner import Runner
@@ -754,7 +754,7 @@ class CoachService:
                 jid = jobs.enqueue("backfill", {Tier.H}, "mcp", force=force)
                 return {"job_id": jid, "kind": "backfill", "status": "queued",
                         "note": "history load started in the background: follow it with get_sync_status"}
-            if scope == "fit":  # force is ignored: a FIT file is never downloaded twice (PLAN-FIT §8.4)
+            if scope == "fit":  # force is ignored: a FIT file is never downloaded twice (docs/FIT.md)
                 active = jobs.has_active(kind="fit")
                 if active:
                     return {"job_id": active["id"], "kind": "fit", "status": active["status"],

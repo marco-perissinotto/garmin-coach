@@ -21,7 +21,7 @@ class Tier(StrEnum):
     D = "D"  # single-day opt-in, TTL 24 h, background
     E = "E"  # profile-ish, TTL 7 d, background
     H = "H"  # history backfill, one-off
-    F = "F"  # FIT downloads (PLAN-FIT D-071): pseudo-tier, no TTL, never requested by the gate
+    F = "F"  # FIT downloads (D-071): pseudo-tier, no TTL, never requested by the gate
 
 
 SYNC_TIERS = frozenset({Tier.A, Tier.B})

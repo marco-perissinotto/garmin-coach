@@ -1,4 +1,4 @@
-"""activity_fit rows, kept files, re-parse, pending list, coverage, schema v4 (PLAN-FIT §4)."""
+"""activity_fit rows, kept files, re-parse, pending list, coverage, schema v4 (docs/FIT.md)."""
 
 from __future__ import annotations
 

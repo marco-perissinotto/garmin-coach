@@ -1,4 +1,4 @@
-"""The DB and file side of FIT ingestion (docs/PLAN-FIT.md §4): ``activity_fit`` rows, ``activity.has_fit`` and the
+"""The DB and file side of FIT ingestion (docs/FIT.md): ``activity_fit`` rows, ``activity.has_fit`` and the
 kept ZIPs under ``<app data>/fit/``. Used by the runner, the CLI, the status and the MCP tools.
 
 The runner calls :func:`prepare` (write the file, parse; no DB writes) before its ``BEGIN IMMEDIATE`` and :func:`save`
@@ -219,7 +219,7 @@ def files_mb(paths: Paths) -> float:
 
 
 def coverage(conn: sqlite3.Connection, settings: Settings, paths: Paths, today: date) -> dict[str, Any]:
-    """Counts for ``status`` / ``get_sync_status`` (PLAN-FIT §8.3); the job fields are added by status.py."""
+    """Counts for ``status`` / ``get_sync_status`` (docs/FIT.md); the job fields are added by status.py."""
     counts = {r["status"]: r["n"] for r in conn.execute(
         "SELECT status, COUNT(*) AS n FROM activity_fit GROUP BY status")}
     return {

@@ -1,4 +1,4 @@
-"""The FIT parser against synthetic files built with the SDK's Encoder (docs/FIT.md, PLAN-FIT §5)."""
+"""The FIT parser against synthetic files built with the SDK's Encoder (docs/FIT.md)."""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def test_privacy_no_serials_no_nulls_and_small() -> None:
     text = json.dumps(s)
     assert str(fitgen.SERIAL) not in text and str(fitgen.SERIAL + 1) not in text and "serial" not in text
     assert nulls(s) == []
-    assert len(text) < 20_000  # PLAN-FIT D-075 target per activity
+    assert len(text) < 20_000  # D-075 target per activity
     assert "record_mesgs" not in text and text.count("45.43") <= 1  # no track: start point only
 
 

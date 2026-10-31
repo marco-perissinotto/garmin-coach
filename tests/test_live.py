@@ -24,7 +24,7 @@ def test_token_profile_and_one_activity() -> None:
 
 
 def test_fit_download_parses_and_zones_match_the_list() -> None:
-    """PLAN-FIT §11/§12: 2 calls. Prints what §12 asks to record (ZIP member, timing, zone index alignment)."""
+    """2 calls. Prints what D-083 asks to record (ZIP member, timing, zone index alignment)."""
     import io
     import time
     import zipfile

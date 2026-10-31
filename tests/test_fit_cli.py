@@ -1,4 +1,4 @@
-"""Offline FIT commands: `fit show`, `fit reparse`, `status --json`, `doctor --offline` (PLAN-FIT §7).
+"""Offline FIT commands: `fit show`, `fit reparse`, `status --json`, `doctor --offline` (docs/FIT.md).
 
 `fit backfill` is only exercised up to its "disabled" exit: past that point it would contact Garmin.
 """

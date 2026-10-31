@@ -2,7 +2,8 @@
 
 Tools run in worker threads (the SDK calls sync functions via ``anyio.to_thread``), so each call opens its own SQLite
 connection and builds its own gate; the refresh lock and the process-wide background guard keep refreshes single.
-Garmin is never called from here except through the gate, plus the lazy detail fetch of one activity (2 calls).
+Garmin is never called from here except through the gate, plus the lazy fetch of one activity (detail, workouts and
+the FIT file: at most 3 calls).
 
 Every method returns a JSON-able dict and never raises: bad input or an internal error becomes ``{"error": ...}``.
 """
@@ -25,8 +26,9 @@ from pydantic import ValidationError
 from .. import state as state_m
 from ..app import App
 from ..athlete import load_inputs
-from ..clock import local_today
+from ..clock import iso, local_today
 from ..context import builder, render
+from ..fit import store as fit_store
 from ..garmin.chunking import parse_range_key
 from ..garmin.endpoints import REFRESH_TIERS, SYNC_TIERS, Tier
 from ..metrics import compute, sport
@@ -45,6 +47,7 @@ MAX_DAY_RANGE = 92  # get_range_summary(granularity=day), get_training_load
 MAX_WEEK_RANGE = 731  # get_range_summary(granularity=week), get_weight
 MAX_ACTIVITIES = 100
 MAX_SPLITS = 40
+MAX_LAPS_OUT = 80  # get_activity(include_laps): more laps are cut and flagged with laps_more
 CURVE_POINTS = 96  # Body Battery curve: one point per 15 min
 HR_SAMPLE_MINUTES = 10  # heart-rate samples are averaged into 10-minute buckets
 MAX_NOTE_CHARS = 500
@@ -57,7 +60,9 @@ SPORT_ALIASES = {
     "strength": sport.STRENGTH, "forza": sport.STRENGTH, "multisport": sport.MULTI, "triathlon": sport.MULTI,
     "other": sport.OTHER, "altro": sport.OTHER,
 }
-_ACTIVITY_HIDDEN = ("summary_hash", "has_fit", "updated_at", "vo2max")  # vo2max: always empty on this API (D-040)
+_ACTIVITY_HIDDEN = ("summary_hash", "updated_at", "vo2max")  # vo2max: always empty on this API (D-040)
+_FIT_META = ("parser_version", "n_laps", "n_records", "laps_truncated", "truncated")
+_FIT_SECTIONS = ("session", "sessions", "zones", "intervals", "dynamics", "records", "route", "device")
 _SPLIT_DROP = re.compile(r"(?i)latitude|longitude")
 
 
@@ -491,44 +496,90 @@ class CoachService:
         out = []
         for r in rows[:limit]:
             v = builder._activity_view(r)
-            v.update(type_key=r["type_key"], has_detail=bool(r["has_detail"]))
+            v.update(type_key=r["type_key"], has_detail=bool(r["has_detail"]), has_fit=bool(r["has_fit"]))
             out.append(_clean(v))
         return self._reply(fr, count=len(out), more=len(rows) > limit, activities=out)
 
-    def _lazy_detail(self, conn: sqlite3.Connection, activity_id: int) -> str | None:
-        """Fetch detail + workouts for one activity (2 calls, synchronous). Returns a problem description or None.
+    def _lazy_fetch(self, conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[str | None, str | None]:
+        """Fetch what one activity is missing: detail + workouts (when ``has_detail = 0``) and the FIT file (when
+        enabled, not a skipped type, never tried): at most 3 calls, synchronous, parsing included. Returns
+        (detail_problem, fit_problem).
 
-        Runs with an empty tier set so tier A's freshness is not touched by a single-activity fetch."""
+        Runs with an empty tier set so tier A's freshness is not touched by a single-activity fetch (D-053); sets
+        the ``sync_wanted_at`` flag so a running fit job yields the lock (D-081)."""
         from ..sync.lock import RefreshLock
         from ..sync.planner import Planner
         from ..sync.runner import Runner
 
         app, s = self.app, self.app.settings
+        aid = int(row["activity_id"])
         now = app.clock()
-        cd = repo.tier_states(conn).get(Tier.A.value, {}).get("cooldown_until")
+        states = repo.tier_states(conn)
+        cd = states.get(Tier.A.value, {}).get("cooldown_until")
         if cd and cd > now:
-            return f"Garmin in cooldown until {cd.isoformat()}: detail not fetched"
-        calls = Planner(conn, s, now).lazy_detail_calls(activity_id)
+            msg = f"Garmin in cooldown until {cd.isoformat()}"
+            return (None if row["has_detail"] else f"{msg}: detail not fetched"), None
+        planner = Planner(conn, s, now)
+        cd_f = states.get(Tier.F.value, {}).get("cooldown_until")
+        fit_blocked = bool(cd_f and cd_f > now)
+        calls = planner.lazy_activity_calls(aid, want_fit=planner.wants_fit(row["type_key"]) and not fit_blocked)
         if not calls:
-            return None
+            return None, None
+        wants_detail = any(c.endpoint != "activity.download" for c in calls)
+        wants_fit = any(c.endpoint == "activity.download" for c in calls)
+
+        def problems(msg: str) -> tuple[str | None, str | None]:
+            return (msg if wants_detail else None), (msg.replace("detail", "FIT") if wants_fit else None)
+
         lock = RefreshLock(app.paths.lock)
-        if not lock.acquire(s.sync.lock_wait_seconds):
-            return "another refresh is running: detail not fetched, ask again in a minute"
+        repo.set_flag(conn, repo.SYNC_WANTED, iso(now))
         try:
-            fetcher = app.fetcher(len(calls), s.sync.sync_timeout_seconds)
+            if not lock.acquire(s.sync.lock_wait_seconds):
+                return problems("another refresh is running: detail not fetched, ask again in a minute")
             try:
-                res = Runner(conn, s, fetcher, clock=app.clock).run(set(), calls=calls)
+                fetcher = app.fetcher(len(calls), s.sync.sync_timeout_seconds)
+                try:
+                    res = Runner(conn, s, fetcher, clock=app.clock, paths=app.paths).run(set(), calls=calls)
+                finally:
+                    fetcher.close()
+            except Exception as exc:  # noqa: BLE001 - the tool still answers from the list row
+                return problems(redact(f"detail fetch failed: {exc}"))
             finally:
-                fetcher.close()
-        except Exception as exc:  # noqa: BLE001 - the tool still answers from the list row
-            return redact(f"detail fetch failed: {exc}")
+                lock.release()
         finally:
-            lock.release()
-        return None if res.status == "done" else f"detail fetch {res.status}: {res.error or ''}".strip()
+            repo.clear_flag(conn, repo.SYNC_WANTED)
+        detail_problem = fit_problem = None
+        if wants_detail and not conn.execute("SELECT has_detail FROM activity WHERE activity_id=?",
+                                             (aid,)).fetchone()[0]:
+            detail_problem = f"detail fetch {res.status}: {res.error or ''}".strip().rstrip(":")
+        if wants_fit and not conn.execute("SELECT 1 FROM activity_fit WHERE activity_id=?", (aid,)).fetchone():
+            st = repo.get_sync_state(conn, "activity.download", str(aid))
+            why = res.error or (f"HTTP {st['last_status']}" if st and st["last_status"] else "not reached")
+            fit_problem = f"FIT download failed ({why}): it is retried on a later request"
+        return detail_problem, fit_problem
+
+    def _fit_view(self, conn: sqlite3.Connection, row: dict[str, Any], include_laps: bool,
+                  include_series: bool) -> dict[str, Any]:
+        status = fit_store.activity_status(conn, self.app.settings, row["activity_id"], row["type_key"])
+        out: dict[str, Any] = {"fit_status": status}
+        summ = fit_store.summary(conn, row["activity_id"]) if status == "ok" else None
+        if summ is None:
+            return out
+        fit: dict[str, Any] = {"meta": {k: summ["meta"][k] for k in _FIT_META if k in summ.get("meta", {})}}
+        fit.update({k: summ[k] for k in _FIT_SECTIONS if k in summ})
+        if include_laps and "laps" in summ:
+            laps = summ["laps"]
+            fit["laps"] = laps[:MAX_LAPS_OUT]
+            if len(laps) > MAX_LAPS_OUT:
+                fit["laps_more"] = True
+        if include_series and "series" in summ:
+            fit["series"] = summ["series"]
+        out["fit"] = fit
+        return out
 
     @_safe
-    def get_activity(self, activity_id: int, include_splits: bool = False,
-                     max_age_minutes: int | None = None) -> dict[str, Any]:
+    def get_activity(self, activity_id: int, include_splits: bool = False, include_laps: bool = False,
+                     include_series: bool = False, max_age_minutes: int | None = None) -> dict[str, Any]:
         if not isinstance(activity_id, int) or activity_id <= 0:
             raise InputError("activity_id must be a positive integer (see list_activities)")
         with self._conn() as conn:
@@ -536,10 +587,11 @@ class CoachService:
             row = conn.execute("SELECT * FROM activity WHERE activity_id=?", (activity_id,)).fetchone()
             if row is None:
                 return self._reply(fr, error=f"activity {activity_id} is not in the local cache (see list_activities)")
-            problem = None if row["has_detail"] else self._lazy_detail(conn, activity_id)
+            problem, fit_problem = self._lazy_fetch(conn, row)
             row = dict(conn.execute("SELECT * FROM activity WHERE activity_id=?", (activity_id,)).fetchone())
             detail = repo.latest_raw(conn, "activity.detail", str(activity_id))
             workouts = repo.latest_raw(conn, "activity.workouts", str(activity_id))
+            fit = self._fit_view(conn, row, include_laps, include_series)
         out: dict[str, Any] = {
             "activity": _clean(row, _ACTIVITY_HIDDEN),
             "view": _clean(builder._activity_view(row)),
@@ -566,8 +618,11 @@ class CoachService:
                     "stepIndex", "intensity", "durationType", "durationValue", "targetType", "targetValueLow",
                     "targetValueHigh", "name", "notes")}) for st in (w.get("steps") or []) if isinstance(st, dict)],
             }) for w in workouts if isinstance(w, dict)]
+        out.update(fit)
         if problem:
             out["detail_problem"] = problem
+        if fit_problem:
+            out["fit_problem"] = fit_problem
         return self._reply(fr, **out)
 
     # -- single-day wellness --------------------------------------------------------------------------------------
@@ -674,12 +729,12 @@ class CoachService:
     @_safe
     def get_sync_status(self) -> dict[str, Any]:
         with self._conn() as conn:
-            return build_status(conn, self.app.settings, self.app.clock)
+            return build_status(conn, self.app.settings, self.app.clock, paths=self.app.paths)
 
     @_safe
     def refresh(self, tiers: list[str] | None = None, force: bool = False, scope: str = "tiers") -> dict[str, Any]:
-        if scope not in ("tiers", "history"):
-            raise InputError("scope must be 'tiers' or 'history'")
+        if scope not in ("tiers", "history", "fit"):
+            raise InputError("scope must be 'tiers', 'history' or 'fit'")
         now = self.app.clock()
         jobs = self.app.jobs
         with self._refresh_lock, self._conn() as conn:
@@ -699,6 +754,22 @@ class CoachService:
                 jid = jobs.enqueue("backfill", {Tier.H}, "mcp", force=force)
                 return {"job_id": jid, "kind": "backfill", "status": "queued",
                         "note": "history load started in the background: follow it with get_sync_status"}
+            if scope == "fit":  # force is ignored: a FIT file is never downloaded twice (docs/FIT.md)
+                active = jobs.has_active(kind="fit")
+                if active:
+                    return {"job_id": active["id"], "kind": "fit", "status": active["status"],
+                            "note": "a FIT backfill is already running: follow it with get_sync_status"}
+                if not self.app.settings.fit.download:
+                    raise InputError("FIT downloads are disabled (fit.download: false in settings.yaml)")
+                if any(j["kind"] == "fit" for j in recent):
+                    raise InputError("a FIT backfill was requested less than 5 minutes ago")
+                cd = states.get(Tier.F.value, {}).get("cooldown_until")
+                if cd and cd > now:
+                    raise InputError(f"Garmin is in cooldown until {cd.isoformat()} (rate limit protection)")
+                jid = jobs.enqueue("fit", {Tier.F}, "mcp")
+                return {"job_id": jid, "kind": "fit", "status": "queued",
+                        "note": "FIT backfill started in the background: it runs in chained jobs and pauses for "
+                                "on-demand refreshes; follow it with get_sync_status"}
 
             try:
                 wanted = {Tier(t.strip().upper()) for t in tiers} if tiers else set(REFRESH_TIERS)

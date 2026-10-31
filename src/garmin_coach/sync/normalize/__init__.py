@@ -87,6 +87,9 @@ def rebuild_all(conn: sqlite3.Connection) -> int:
         for t in NORMALIZED_TABLES:
             conn.execute(f"DELETE FROM {t}")
         n = _apply_rows(conn, conn.execute("SELECT * FROM raw_payload ORDER BY last_seen_at, id"))
+        # FIT summaries are not part of the normalized layer (no re-parse here, D-074): restore the flag.
+        conn.execute("UPDATE activity SET has_fit=1 WHERE activity_id IN "
+                     "(SELECT activity_id FROM activity_fit WHERE status='ok')")
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

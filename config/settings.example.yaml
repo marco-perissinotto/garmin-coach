@@ -13,7 +13,15 @@ sync:
   lock_wait_seconds: 15
   heartbeat_stale_seconds: 120   # a 'running' job without heartbeat for this long is treated as orphaned
   cooldown_minutes: {rate_limit: 120, network_error: 10}
-  download_fit: false
+fit:                             # original FIT files (docs/FIT.md); replaces the old sync.download_fit
+  download: true                 # download + parse the FIT of every new activity during sync (tier A, history)
+  keep_files: true               # keep <app data>/fit/<activityId>.zip for offline re-parsing (~0.1-1 MB each)
+  skip_types: []                 # Garmin typeKeys never downloaded, e.g. [walking, hiking]
+  backfill_days: 0               # `fit backfill` window in days; 0 = the whole activity history in the cache
+  backfill_budget_calls: 100     # per fit job; jobs chain until every eligible activity has been tried
+  call_gap_ms: 1500              # pacing of fit jobs (ZIP responses are heavier than JSON)
+  max_laps: 300                  # laps kept per activity (older ones dropped, meta.laps_truncated=true)
+  series_points: 48              # points of the coarse intensity profile
 optional_endpoints: {nutrition: false, womens_health: false, hydration: true, spo2: true}
 context:
   daily_token_budget: 3500       # includes the coaching state (at most ~1 000 tokens)

@@ -146,3 +146,38 @@ def is_cache_empty(conn: sqlite3.Connection) -> bool:
     """True until a history backfill (tier H) has completed once."""
     row = conn.execute("SELECT last_completed_at FROM tier_state WHERE tier='H'").fetchone()
     return not (row and row["last_completed_at"])
+
+
+# -- app_flag: tiny process-wide signals (D-081) -------------------------------------------------------------
+# Set by whoever waits for the refresh lock to serve a consumer; fit jobs yield while it is fresh. A flag older than
+# SYNC_WANTED_MAX_AGE_S is ignored, so a crashed process cannot stall the fit jobs.
+SYNC_WANTED = "sync_wanted_at"
+SYNC_WANTED_MAX_AGE_S = 30
+
+
+def set_flag(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute("INSERT INTO app_flag(key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                 (key, value))
+
+
+def get_flag(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM app_flag WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def clear_flag(conn: sqlite3.Connection, key: str) -> None:
+    conn.execute("DELETE FROM app_flag WHERE key=?", (key,))
+
+
+def flag_age_seconds(conn: sqlite3.Connection, key: str, now: datetime) -> float | None:
+    """Seconds since a timestamp flag was set; None when absent or unreadable."""
+    try:
+        ts = parse_iso(get_flag(conn, key))
+    except ValueError:
+        return None
+    return None if ts is None else (now - ts).total_seconds()
+
+
+def sync_wanted(conn: sqlite3.Connection, now: datetime) -> bool:
+    age = flag_age_seconds(conn, SYNC_WANTED, now)
+    return age is not None and age < SYNC_WANTED_MAX_AGE_S

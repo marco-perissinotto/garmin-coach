@@ -1,6 +1,6 @@
 ---
 name: coach
-description: Garmin endurance coach. Daily check-in from the garmin-coach MCP tools ("/coach"), weekly review ("/coach week"), next-week plan ("/coach plan"), race readiness ("/coach race <event>"), data status ("/coach status"). Use when the user asks how to train today, how the week went, or whether their Garmin data is up to date.
+description: Garmin endurance coach. Daily check-in from the garmin-coach MCP tools ("/coach"), weekly review ("/coach week"), next-week plan ("/coach plan"), race readiness ("/coach race <event>"), data status ("/coach status"), loading past FIT files ("/coach fit"). Use when the user asks how to train today, how the week went, how a specific workout went, or whether their Garmin data is up to date.
 ---
 
 # Garmin coach
@@ -37,10 +37,29 @@ the athlete agreed on the content.
   `update_coaching_state` (`get_coaching_state` re-reads it).
 - `race <name>`: `get_events` and `get_context_pack(name="28d")`; phase, what to do until race day (taper
   included), expected form against the goal and past results in the history. Record a go/no-go as a taken decision.
-- `status`: `get_sync_status` only; report history loaded, age of the data, running job progress and ETA. Mention
-  the coaching state's age when it is stale (the brief's `coaching_state`).
+- `status`: `get_sync_status` only; report history loaded, age of the data, running job progress and ETA, and the
+  `fit` block (FIT files ok / pending / no file / parse errors, the running FIT job with its ETA). Mention the
+  coaching state's age when it is stale (the brief's `coaching_state`).
+- `fit`: `refresh(scope="fit")`, then `get_sync_status`; report the coverage (`fit` block) and explain that the past
+  FIT files load in the background in chained jobs that pause whenever a question needs Garmin, and that
+  `/coach status` shows the progress.
 - `sync` / "I just synced my watch": `refresh(tiers=["A","B"], force=true)`, then `get_sync_status` until the job
   is done, then the daily check-in.
+
+## Session analysis (FIT)
+When the check-in assesses yesterday's key session, when the user asks about a specific workout, or during `week` for
+the key sessions: call `get_activity(id, include_laps=true)` and read `fit`:
+- `zones`: time in HR and power zones of the session;
+- `intervals` + `laps`: the reps (pace/power/HR per rep) and the fade across reps (`first_to_last_speed_pct`,
+  `first_to_last_hr`);
+- `dynamics`: pedal balance, running cadence, ground contact, vertical ratio, swim stroke;
+- `records.decoupling_pct` (aerobic durability on long steady sessions): < 5 % solid, 5-10 % acceptable, > 10 % drift
+  worth a comment;
+- `series` (`include_series=true`) only when the user asks about the shape of the session.
+Prefer FIT for laps and zones, and the activity list (`list_activities`, `activity`/`view`) for load and training
+effect (Garmin's recomputed values). If `fit_status` is not `ok`, say that the FIT is not available for that activity
+and why (`no_file`: Garmin has no original file, e.g. a manual entry; `parse_error`; `disabled`; `skipped_type`); when
+it is `not_downloaded`, offer `/coach fit`.
 
 ## Recording
 - Durable rule confirmed by the user ("from now on long runs on Saturday") → `append_coach_note`, one sentence.
@@ -60,4 +79,5 @@ the athlete agreed on the content.
 
 ## Data honesty
 If a value is missing, say it is missing. Never invent activities, results or symptoms, and keep what was done
-separate from what was planned.
+separate from what was planned. A FIT value never overrides a symptom the athlete reported. Never infer intervals
+when `fit.intervals` is absent: the session had no structured work/rest laps.

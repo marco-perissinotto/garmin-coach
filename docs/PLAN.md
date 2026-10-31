@@ -65,7 +65,7 @@
 | Refresh trigger | **On-demand, staleness-driven ("freshness gate", §6.5)** inside the MCP server and the CLI, plus a **startup check (§6.6)** that launches one background job when the cache is empty or stale | No OS scheduler, no daemon, nothing to install on either machine. The cache is refreshed when someone actually asks for data and it is older than its TTL; when the MCP server boots it pre-warms the cache in the background so the first question is already fast. An empty cache triggers the initial backfill automatically. |
 | Agent interface | **MCP server over stdio** (Python `mcp` SDK, `FastMCP`) | Native for Claude Desktop and Claude Code; local, no network. Optional HTTP mode bound to localhost only. |
 | Context format | Markdown "context packs" + JSON | Markdown is what you paste/upload into ChatGPT Projects; JSON is what MCP tools return. |
-| FIT parsing (optional, Phase 5) | `garmin-fit-sdk` (official) or `fitdecode` | Lap/record-level data for interval analysis. |
+| FIT parsing (Phase 5a, `docs/FIT.md`) | `garmin-fit-sdk` (official) | Lap/record-level data for interval analysis. |
 | Multi-machine | Private git repo for code; **each machine keeps its own cache and refreshes independently** | Avoids syncing a SQLite file through a cloud drive; refreshes are idempotent and cheap, and a machine that is not being used makes zero calls. |
 
 ### 1.4 Architecture decision: "local context engine + thin MCP"
@@ -130,7 +130,7 @@ where the spec says nothing, use the conservative value and shrink on `400`.
 | 1 | `/activitylist-service/activities/search/activities` | `start`, `limit`, `startDate`, `endDate`, `sortBy`, `sortOrder`, `activityType`, … | paginated (`limit` ≤ 100 safe) | `search_activities` | Discover new/changed activities; main source of training load, TE, VO2max | **A** TTL 60 min |
 | 2 | `/activity-service/activity/{activityId}` | path | n/a | `get_activity` | Full summary + split summaries for new activities | A (only new IDs) |
 | 3 | `/activity-service/activity/{activityId}/workouts` | path | n/a | `get_activity_workouts` | Structured workout followed (if any) | A (only new IDs) |
-| 4 | `/download-service/files/activity/{activityId}` | path | n/a | `download_activity` (bytes, ZIP) | Optional FIT archive (Phase 5) | A (only new IDs, if enabled) |
+| 4 | `/download-service/files/activity/{activityId}` | path | n/a | `download_activity` (bytes, ZIP) | FIT download, see `FIT.md` | A follow-up for new IDs as pseudo-tier F; `fit backfill` for the past |
 | 5 | `/usersummary-service/usersummary/daily` | `calendarDate` | 1 day | none → `client.get("/usersummary-service/usersummary/daily", params={"calendarDate": d})` | RHR, 7-day RHR avg, stress durations, Body Battery high/low/wake, steps, intensity minutes for **today & yesterday** | **B** TTL 60 min (2 calls) |
 | 6 | `/usersummary-service/v2/dailysummaries` | `startDate`, `endDate` | 1 year | `get_daily_summaries` | Range backfill and refresh of last 7 days | **C** TTL 24 h + backfill |
 | 7 | `/sleep-service/sleep/dailySleep` | `date` | 1 day | `get_daily_sleep` | Last night in full (stages, score, SpO2, respiration, HRV-ish avg HR, sleep need) | B (today) |
@@ -255,7 +255,7 @@ garmin-coach/
 | Token cache (official client) | `%USERPROFILE%\.config\garmin\connect-personal-api-bearer-token.json` | same path |
 | App data dir | `%LOCALAPPDATA%\garmin-coach\` | `~/Library/Application Support/garmin-coach/` |
 | SQLite DB | `<app data>/garmin.db` | same |
-| FIT archive (optional) | `<app data>/fit/<activityId>.zip` | same |
+| FIT archive (`fit.keep_files`, default on; summaries in the `activity_fit` table) | `<app data>/fit/<activityId>.zip` | same |
 | Context output | `<app data>/context/` | same |
 | User config (`athlete.yaml`, `events.yaml`, `settings.yaml`) and knowledge (`history.md`, `coach-notes.md`) | `<app data>/config/` — the owner may keep this folder in a **private** git repo or copy it between machines by hand; it is the only thing that must be kept in sync | same |
 | Logs | `<app data>/logs/garmin-coach.log` (rotating, redacted) | same |
@@ -360,6 +360,10 @@ columns above are a placeholder for "low/upper/balanced" style bounds.
 garmin-coach doctor            # checks key file perms, token exchange works (calls profile settings), db ok; tells you if the cache is empty
 garmin-coach backfill [--days 365] [--fit] [--background]   # history load; idempotent; resumable. Foreground with a progress bar by default.
                                                             #   Auto-started in the background by the startup check when the cache is empty (§6.6).
+                                                            #   --fit: when the history is done, also run `fit backfill`.
+garmin-coach fit backfill [--days N] [--background]         # FIT files of past activities, newest first, chained jobs that yield to on-demand refreshes
+garmin-coach fit reparse [--all] [ACTIVITY_ID ...]          # offline: rebuild FIT summaries from the kept ZIPs (docs/FIT.md)
+garmin-coach fit show ACTIVITY_ID [--json]                  # offline: print one FIT summary
 garmin-coach sync [--tier A,B,...] [--force] [--background] # force a refresh now: plan → fetch → normalize → context build.
                                                             #   Without --force it applies the same TTLs as the freshness gate, so it is a no-op when fresh.
 garmin-coach normalize --all   # rebuild normalized tables from raw
@@ -367,7 +371,7 @@ garmin-coach context build [--offline]             # recompute metrics_daily and
 garmin-coach context show [daily|weekly|events] [--offline] [--max-age 60]   # print a pack (for copy/paste into ChatGPT)
 garmin-coach context export --zip [--offline]      # bundle packs for a ChatGPT Project
 garmin-coach mcp [--http --port 8765]              # start MCP server (stdio default); runs the startup check first
-garmin-coach status [--watch] [--json]             # cache age per tier, backfill done?, running job with progress, cooldowns, key age
+garmin-coach status [--watch] [--json]             # cache age per tier, backfill done?, running job with progress, cooldowns, key age, FIT coverage
 garmin-coach jobs [list|show <id>|cancel <id>|prune]   # job history and control (§6.7)
 ```
 There is **no** `schedule` or `daemon` command. Garmin is contacted only while a `garmin-coach` process is alive and only
@@ -441,8 +445,8 @@ Which tiers each consumer requests (so a question about HR zones does not trigge
 | `get_weight`, `get_hr_zones`, `get_athlete_profile`, `athlete` resource | E (+ C for weight) |
 | `get_events`, `events` resource | none (YAML only) |
 | `get_sync_status` | none (reports ages, never refreshes) |
-| `refresh(tiers?, force?, scope?)` tool | enqueues a job for the given tiers (or `scope="history"` → backfill); `force=True` sets `max_age=0`; rate-limited to once per 5 min per tier even when forced; returns the job id |
-| `get_activity(id)` for an activity with `has_detail=0` | lazy fetch of endpoints 2–3 for that single id (2 calls), synchronous |
+| `refresh(tiers?, force?, scope?)` tool | enqueues a job for the given tiers (or `scope="history"` → backfill, `scope="fit"` → FIT backfill); `force=True` sets `max_age=0`; rate-limited to once per 5 min per tier even when forced; returns the job id |
+| `get_activity(id)` for an activity with `has_detail=0` or no FIT attempt | lazy fetch of endpoints 2–4 for that single id (up to 3 calls, parsing included), synchronous |
 | `context export --zip` | A, B, C, D, E synchronously (it is a deliberate "give me everything" action) |
 
 Operational notes:
@@ -591,12 +595,14 @@ and, when applicable, `⚠ Served stale: <reason>` so the assistant can tell the
   - `append_coach_note(text)` → writes only to `coach-notes.md`: appends a dated line so the coach can record an agreement ("from now on long run on Saturdays") that persists across chats. Local file only, never touches Garmin.
   - `get_coaching_state()` and `update_coaching_state(symptoms?, plan?, decisions?, confirm?)` → the short-term state of §11.3; the second write tool, local file only, per-section replace (an omitted section is kept, an empty one cleared, `confirm=true` re-dates an unchanged state). Neither touches Garmin nor returns `freshness`. `get_daily_brief` embeds the same object as `coaching_state`.
   - `get_range_summary(start, end, granularity=day|week, max_age_minutes?)`
-  - `list_activities(start?, end?, type?, limit=20, max_age_minutes?)`, `get_activity(activity_id, include_splits=false)`
+  - `list_activities(start?, end?, type?, limit=20, max_age_minutes?)` (items carry `has_fit`),
+    `get_activity(activity_id, include_splits=false, include_laps=false, include_series=false)` (FIT summary in `fit`
+    with `fit_status`, see `FIT.md`)
   - `get_training_load(start, end, max_age_minutes?)` → load/ATL/CTL/TSB/ACWR series
   - `get_sleep(date, max_age_minutes?)`, `get_hrv(date, …)`, `get_body_battery(date, include_curve=false, …)`, `get_heart_rate(date, include_samples=false, …)`
   - `get_weight(start, end, …)`, `get_hr_zones()`
   - `get_sync_status()` → the §6.7 object: history loaded?, cache age per tier, running job with progress and ETA, last jobs, cooldowns, key age; **never refreshes**
-  - `refresh(tiers?: list, force?: bool, scope?: "tiers"|"history")` → explicit reload ("I just synced my watch") or history backfill; enqueues a background job and returns `{job_id}`; rate-limited to once per 5 min per tier
+  - `refresh(tiers?: list, force?: bool, scope?: "tiers"|"history"|"fit")` → explicit reload ("I just synced my watch"), history backfill or FIT backfill; enqueues a background job and returns `{job_id}`; rate-limited to once per 5 min per tier
   - `cancel_job(job_id)`
 - On server start the §6.6 startup check runs **before** the first request is served; it never blocks the server, it only enqueues.
 - Resources: `garmin-coach://context/daily-brief`, `.../last-7d`, `.../last-28d`, `.../athlete`, `.../events`,
@@ -690,7 +696,15 @@ sync:
   lock_wait_seconds: 15
   heartbeat_stale_seconds: 120   # a 'running' job without heartbeat for this long is treated as orphaned
   cooldown_minutes: {rate_limit: 120, network_error: 10}
-  download_fit: false
+fit:                             # FIT files, docs/FIT.md (replaces sync.download_fit)
+  download: true                 # download + parse the FIT of every new activity during sync
+  keep_files: true               # keep <app data>/fit/<activityId>.zip for offline re-parsing
+  skip_types: []                 # Garmin typeKeys never downloaded
+  backfill_days: 0               # `fit backfill` window; 0 = the whole activity history in the cache
+  backfill_budget_calls: 100     # per fit job; jobs chain until every eligible activity has been tried
+  call_gap_ms: 1500
+  max_laps: 300
+  series_points: 48
 optional_endpoints: {nutrition: false, womens_health: false, hydration: true, spo2: true}
 context: {daily_token_budget: 3500, weekly_token_budget: 6000, recent_activities: 10, state_stale_days: 7}
 ```
@@ -828,6 +842,7 @@ decisions:
 
 ### Phase 5 — Optional depth
 - FIT download/parse for new activities: laps, intervals, HR/power time-in-zone computed locally; `get_activity(include_laps=true)`.
+  **Done as Phase 5a** (`docs/FIT.md`, decisions D-070 onwards).
 - Nutrition / hydration / SpO2 opt-ins in context.
 - `context export --zip` + `--clipboard` for the ChatGPT Project workflow.
 
@@ -860,6 +875,7 @@ decisions:
 3. Does `activityTrainingLoad` populate for all activity types (strength, swim)? If null, the TRIMP fallback is used.
 4. Behaviour of single-day endpoints for days with no data: `404`, `204`, or `200` with nulls?
 5. Does the ZIP from the download endpoint contain the full FIT (VO2max/recovery fields reported stripped on other tiers)?
+   (Answer in DECISIONS D-083.)
 6. Rate limits: record every `429` with timestamp to infer the real budget over the first weeks.
 7. Time zone: `calendarDate` is the user's local day; confirm midnight behaviour for late-night activities and for travel.
 

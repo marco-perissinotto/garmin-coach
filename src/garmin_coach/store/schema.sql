@@ -99,3 +99,20 @@ CREATE TABLE IF NOT EXISTS metrics_daily (
   date TEXT PRIMARY KEY, load REAL, atl REAL, ctl REAL, tsb REAL, acwr REAL, monotony REAL, strain REAL,
   readiness_score INTEGER, readiness_reasons TEXT, vo2max_run REAL, vo2max_bike REAL
 );
+
+-- v4 (docs/FIT.md): created by the v3 -> v4 migration in db.py, repeated here for reference.
+-- One row per download attempt; activity.has_fit = 1 iff status = 'ok'. Not part of the normalized layer.
+CREATE TABLE IF NOT EXISTS activity_fit (
+  activity_id INTEGER PRIMARY KEY,
+  status TEXT NOT NULL,              -- 'ok' | 'parse_error' | 'no_fit' | 'not_found'
+  fetched_at TEXT NOT NULL,          -- ISO8601 UTC of the download (or of the 404)
+  parsed_at TEXT,                    -- ISO8601 UTC of the last parse
+  parser_version INTEGER,            -- fit.parse.PARSER_VERSION used; NULL when nothing was parsed
+  file_name TEXT,                    -- '<activityId>.zip' under <app data>/fit/; NULL when not kept / not_found
+  zip_sha256 TEXT, zip_bytes INTEGER, fit_bytes INTEGER,
+  sport TEXT, sub_sport TEXT, device TEXT,
+  n_sessions INTEGER, n_laps INTEGER, n_records INTEGER,
+  data TEXT,                         -- JSON FitSummary (docs/FIT.md), only when status='ok'
+  error TEXT                         -- redacted, <= 500 chars, for parse_error / no_fit
+);
+CREATE TABLE IF NOT EXISTS app_flag (key TEXT PRIMARY KEY, value TEXT NOT NULL);  -- 'sync_wanted_at'

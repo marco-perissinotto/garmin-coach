@@ -1,4 +1,5 @@
-"""garmin-coach command line (PLAN §6.1, §9.1): doctor, backfill, sync, normalize, status, jobs, context, mcp, install."""
+"""garmin-coach command line (PLAN §6.1, §9.1): doctor, backfill, sync, normalize, status, jobs, context, fit, mcp,
+install."""
 
 from __future__ import annotations
 
@@ -52,6 +53,8 @@ context_cli = typer.Typer(no_args_is_help=True, help="Context packs for the coac
 app_cli.add_typer(context_cli, name="context")
 install_cli = typer.Typer(no_args_is_help=True, help="Register the MCP server in Claude Desktop / Claude Code.")
 app_cli.add_typer(install_cli, name="install")
+fit_cli = typer.Typer(no_args_is_help=True, help="FIT files: historical download, offline re-parse, inspection.")
+app_cli.add_typer(fit_cli, name="fit")
 
 
 class _LazyConsole:
@@ -139,6 +142,29 @@ def _report(job: dict[str, Any]) -> None:
     err.print(msg)
 
 
+def _follow_chain(a: App, kind: str, tiers: set[Tier], *, quiet: bool) -> dict[str, Any]:
+    """Enqueue a job of ``kind`` (or follow the active one) and follow its chain of budget-limited continuations
+    until it ends (D-033, D-073). Returns the last job."""
+    active = a.jobs.has_active(kind=kind)
+    jid = active["id"] if active else a.jobs.enqueue(kind, tiers, "cli")
+    if active:
+        err.print(f"{kind} job #{jid} already active; following it")
+    while True:
+        job = _wait_job(a, jid, quiet=quiet)
+        _report(job)
+        nxt = a.jobs.has_active(kind=kind)
+        if job.get("status") != "partial" or not nxt:
+            return job
+        jid = nxt["id"]
+
+
+def _fit_cooldown(a: App) -> str | None:
+    from .store import repo
+
+    cd = repo.tier_states(a.conn).get(Tier.F.value, {}).get("cooldown_until")
+    return cd.isoformat() if cd and cd > a.clock() else None
+
+
 def _run_startup_then(a: App, *, refresh_stale: bool) -> None:
     jid = startup_check(a.jobs, a.settings, trigger="cli", refresh_stale=refresh_stale)
     if jid:
@@ -165,32 +191,28 @@ def doctor(offline: Annotated[bool, typer.Option("--offline", help="Skip the tok
 @app_cli.command()
 def backfill(
     days: Annotated[int | None, typer.Option(help="History window in days (default settings.sync.backfill_days).")] = None,
-    fit: Annotated[bool, typer.Option("--fit", help="Also download FIT archives (Phase 5, not yet implemented).")] = False,
+    fit: Annotated[bool, typer.Option("--fit", help="When the history is loaded, also run `fit backfill`.")] = False,
     background: Annotated[bool, typer.Option("--background", help="Run detached; watch with `status --watch`.")] = False,
     quiet: Annotated[bool, typer.Option("--quiet", hidden=True)] = False,
 ) -> None:
     """Load history (idempotent, resumable). Exit code 0 done, 2 partial, 1 failed."""
-    if fit:
-        err.print("--fit is a Phase 5 feature and is ignored for now.")
     if background:
-        pid = _spawn_detached(["backfill", "--quiet"] + (["--days", str(days)] if days else []))
+        pid = _spawn_detached(["backfill", "--quiet"] + (["--days", str(days)] if days else []) +
+                              (["--fit"] if fit else []))
         err.print(f"backfill started in background (pid {pid}); watch with: garmin-coach status --watch")
         return
     a = _app()
     if days:
         a.settings.sync.backfill_days = days
     jobs_mod.cleanup_orphans(a.conn, a.settings)
-    active = a.jobs.has_active(kind="backfill")
-    jid = active["id"] if active else a.jobs.enqueue("backfill", {Tier.H}, "cli")
-    if active:
-        err.print(f"backfill job #{jid} already active; following it")
-    while True:  # follow the chain of budget-limited backfill jobs until the history is complete
-        job = _wait_job(a, jid, quiet=quiet)
-        _report(job)
-        nxt = a.jobs.has_active(kind="backfill")
-        if job.get("status") != "partial" or not nxt:
-            break
-        jid = nxt["id"]
+    job = _follow_chain(a, "backfill", {Tier.H}, quiet=quiet)
+    if fit and job.get("status") == "done":
+        if not a.settings.fit.download:
+            err.print("fit.download is false in settings.yaml: FIT backfill skipped")
+        elif cd := _fit_cooldown(a):
+            err.print(f"FIT downloads are in cooldown until {cd} (rate limit protection): FIT backfill skipped")
+        else:
+            job = _follow_chain(a, "fit", {Tier.F}, quiet=quiet)
     raise typer.Exit(jobs_mod.EXIT_CODES.get(job.get("status", "failed"), 1))
 
 
@@ -246,6 +268,18 @@ def _status_table(s: dict[str, Any]) -> Any:
         t.add_row("H (history)" if name == "H" else name, age, ttl, state, note[:70])
     hist = f"loaded {s['history_loaded_at']}" if s["history_loaded"] else "[yellow]not loaded[/]"
     t.caption = f"history: {hist} | key age: {s['key_age_days']} d"
+    fit = s.get("fit") or {}
+    if fit:
+        t.caption += (f"\nFIT: {fit['ok']} ok · {fit['pending']} pending · {fit['no_file']} no file · "
+                      f"{fit['parse_error']} parse error · {fit['files_mb']} MB"
+                      + ("" if fit["enabled"] else " (download disabled)")
+                      + (f" · cooldown until {fit['cooldown_until']}" if fit.get("cooldown_until") else ""))
+        fj, lj = fit.get("job"), fit.get("last_job")
+        if fj:
+            t.caption += (f"\nFIT job #{fj['id']} {fj['status']}: {fj['calls_done']}/{fj['calls_planned']} | "
+                          f"{fj['current_step'] or ''} | ETA {fj['eta_seconds']} s")
+        elif lj:
+            t.caption += f"\nlast FIT job #{lj['id']} {lj['status']} at {lj['finished_at']}"
     j = s.get("job")
     if j:
         t.caption += (f"\njob #{j['id']} {j['kind']} {j['status']}: {j['calls_done']}/{j['calls_planned']} "
@@ -263,7 +297,7 @@ def status(
 ) -> None:
     """Cache age per tier, history loaded?, running job with progress, cooldowns, key age. Never refreshes."""
     a = _app()
-    s = build_status(a.conn, a.settings)
+    s = build_status(a.conn, a.settings, paths=a.paths)
     if as_json:
         print(json.dumps(s, indent=2, default=str))
         return
@@ -277,7 +311,7 @@ def status(
             seen_job = s.get("job") is not None
             while True:
                 time.sleep(2)
-                s = build_status(a.conn, a.settings)
+                s = build_status(a.conn, a.settings, paths=a.paths)
                 live.update(_status_table(s))
                 seen_job = seen_job or s.get("job") is not None
                 if seen_job and s.get("job") is None:
@@ -320,6 +354,117 @@ def jobs_cancel(job_id: int) -> None:
 def jobs_prune(keep: int = 50) -> None:
     a = _app()
     err.print(f"deleted {jobs_mod.prune_jobs(a.conn, keep)} job rows")
+
+
+# -- FIT (docs/FIT.md) -----------------------------------------------------------------------------------
+@fit_cli.command("backfill")
+def fit_backfill(
+    days: Annotated[int | None, typer.Option(help="Only activities of the last N days (default fit.backfill_days; "
+                                                  "0 = the whole history in the cache).")] = None,
+    background: Annotated[bool, typer.Option("--background", help="Run detached; watch with `status --watch`.")] = False,
+    quiet: Annotated[bool, typer.Option("--quiet", hidden=True)] = False,
+) -> None:
+    """Download and parse the FIT files of past activities (resumable).
+
+    Every activity without a download attempt, newest first, in chained jobs of fit.backfill_budget_calls calls that
+    pause when a question needs Garmin. Exit code 0 done, 2 partial, 1 failed."""
+    if background:
+        pid = _spawn_detached(["fit", "backfill", "--quiet"] + ([] if days is None else ["--days", str(days)]))
+        err.print(f"FIT backfill started in background (pid {pid}); watch with: garmin-coach status --watch")
+        return
+    a = _app()
+    if days is not None:
+        a.settings.fit.backfill_days = days
+    if not a.settings.fit.download:
+        err.print("fit.download is false in settings.yaml: nothing to do")
+        raise typer.Exit(1)
+    _run_startup_then(a, refresh_stale=False)
+    if cd := _fit_cooldown(a):
+        err.print(f"FIT downloads are in cooldown until {cd} (rate limit protection): try again later")
+        raise typer.Exit(1)
+    job = _follow_chain(a, "fit", {Tier.F}, quiet=quiet)
+    raise typer.Exit(jobs_mod.EXIT_CODES.get(job.get("status", "failed"), 1))
+
+
+@fit_cli.command("reparse")
+def fit_reparse(
+    activity_ids: Annotated[list[int] | None, typer.Argument(help="Only these activities.")] = None,
+    all_: Annotated[bool, typer.Option("--all", help="Every kept ZIP, whatever its parser version.")] = False,
+) -> None:
+    """Offline: rebuild FIT summaries from the kept ZIPs.
+
+    Default: those written by an older parser or that failed to parse. To download a file again, delete its rows by
+    hand:
+    DELETE FROM activity_fit WHERE activity_id=N; DELETE FROM sync_state WHERE endpoint='activity.download' AND
+    key='N'; then run `garmin-coach fit backfill`."""
+    from collections import Counter
+
+    from .fit import store as fit_store
+
+    a = _app()
+    missing: list[int] = []
+    if activity_ids:
+        todo = list(activity_ids)
+    else:
+        todo, missing = fit_store.reparse_candidates(a.conn, everything=all_)
+    t0 = time.perf_counter()
+    counts: Counter[str] = Counter()
+    for aid in todo:
+        status = fit_store.reparse(a.conn, a.paths, a.settings, aid, a.clock())
+        if status == "no_file":
+            missing.append(aid)
+        else:
+            counts[status] += 1
+    err.print(f"re-parsed {sum(counts.values())} files in {time.perf_counter() - t0:.1f}s: "
+              + (", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "nothing to do"))
+    if missing:
+        shown = ", ".join(str(x) for x in missing[:20]) + (" ..." if len(missing) > 20 else "")
+        err.print(f"no file kept for {len(missing)} activities ({shown}): delete the `activity_fit` and "
+                  "`sync_state` rows to re-download (see --help)")
+
+
+@fit_cli.command("show")
+def fit_show(
+    activity_id: int,
+    as_json: Annotated[bool, typer.Option("--json", help="The whole FitSummary as JSON.")] = False,
+) -> None:
+    """Offline: print the FIT summary of one activity (debug aid)."""
+    from .fit import store as fit_store
+
+    a = _app()
+    s = fit_store.summary(a.conn, activity_id)
+    if s is None:
+        row = a.conn.execute("SELECT status, error FROM activity_fit WHERE activity_id=?", (activity_id,)).fetchone()
+        err.print(f"activity {activity_id}: " + (f"FIT {row['status']}" + (f" ({row['error']})" if row["error"] else "")
+                                                 if row else "no FIT downloaded"))
+        raise typer.Exit(1)
+    _utf8_stdout()
+    if as_json:
+        print(json.dumps(s, indent=2, ensure_ascii=False))
+        return
+    from rich.table import Table
+
+    sess = Table(title=f"FIT {activity_id}: session", show_header=False)
+    for k, v in s.get("session", {}).items():
+        sess.add_row(k, str(v))
+    console.print(sess)
+    zones = s.get("zones") or {}
+    for kind in ("hr", "power"):
+        z = zones.get(kind)
+        if z:
+            console.print(f"zones {kind} ({zones.get('source')}): time_s={z.get('time_s')} "
+                          f"bounds={z.get('boundaries_bpm') or z.get('boundaries_w') or z.get('floors_bpm')}",
+                          highlight=False)
+    laps = Table(title="laps")
+    cols = ("i", "timer_s", "distance_m", "avg_hr", "avg_power", "avg_speed_mps", "intensity")
+    for c in cols:
+        laps.add_column(c)
+    for lap in s.get("laps", []):
+        laps.add_row(*(str(lap.get(c, "")) for c in cols))
+    console.print(laps)
+    for key in ("intervals", "dynamics", "records", "device"):
+        if key in s:
+            console.print(f"{key}: {json.dumps(s[key], ensure_ascii=False)}", highlight=False)
 
 
 # -- context packs (PLAN §8) --------------------------------------------------------------------------------------

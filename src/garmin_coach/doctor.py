@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -111,6 +113,7 @@ def run_doctor(paths: Paths, settings: Settings, *, repo_root: Path, online: boo
             checks.append(Check(name, True, f"{p} (~{tokens} tokens)"))
 
     checks.append(_state_check(paths, settings, local_today(clock())))
+    checks.extend(_fit_checks(paths, settings, local_today(clock())))
 
     failed = [c for c in checks if not c.ok and c.critical]
     if any(c.name == "API key" for c in failed):
@@ -128,6 +131,55 @@ def run_doctor(paths: Paths, settings: Settings, *, repo_root: Path, online: boo
         else:
             nxt = client_step or "garmin-coach status"
     return checks, nxt
+
+
+def _fit_checks(paths: Paths, settings: Settings, today: date) -> list[Check]:
+    """FIT ingestion (docs/FIT.md): the SDK, the folder for the kept files, the obsolete setting, the coverage."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    from .fit import store as fit_store
+
+    out: list[Check] = []
+    enabled = settings.fit.download
+    try:
+        import garmin_fit_sdk  # noqa: F401 - only checks that it imports
+
+        out.append(Check("FIT SDK", True, f"garmin-fit-sdk {version('garmin-fit-sdk')}"
+                         + ("" if enabled else " (FIT downloads disabled in settings)")))
+    except (ImportError, PackageNotFoundError):
+        out.append(Check("FIT SDK", False, "garmin-fit-sdk is not installed: run `uv sync`", critical=enabled))
+    if settings.fit.keep_files:
+        try:
+            paths.fit_dir.mkdir(parents=True, exist_ok=True)
+            fd, probe = tempfile.mkstemp(prefix=".doctor.", dir=paths.fit_dir)
+            os.close(fd)
+            os.unlink(probe)
+            out.append(Check("FIT folder", True, f"{paths.fit_dir} ({fit_store.files_mb(paths)} MB)"))
+        except OSError as exc:
+            out.append(Check("FIT folder", False, f"{paths.fit_dir} is not writable ({type(exc).__name__}): FIT "
+                             "summaries are still stored, the files are not kept", critical=False))
+    if paths.settings_file.exists():
+        try:
+            raw = yaml.safe_load(paths.settings_file.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError:
+            raw = {}
+        sync = raw.get("sync") if isinstance(raw, dict) else None
+        if isinstance(sync, dict) and "download_fit" in sync:
+            out.append(Check("settings.yaml", False, "sync.download_fit is obsolete and ignored: use the `fit:` block "
+                             "(fit.download, see config/settings.example.yaml)", critical=False))
+    try:
+        conn = db.connect(paths.db)
+        try:
+            cov = fit_store.coverage(conn, settings, paths, today)
+        finally:
+            conn.close()
+        out.append(Check("FIT coverage", True, f"{cov['ok']} ok, {cov['pending']} pending, {cov['no_file']} no file, "
+                         f"{cov['parse_error']} parse errors" + ("" if not cov["pending"] or not enabled else
+                                                                 " (load the past with: garmin-coach fit backfill)"),
+                         critical=False))
+    except Exception as exc:  # noqa: BLE001 - the database check above already reports a broken DB
+        out.append(Check("FIT coverage", False, redact(str(exc)), critical=False))
+    return out
 
 
 def _state_check(paths: Paths, settings: Settings, today: date) -> Check:

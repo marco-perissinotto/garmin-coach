@@ -50,6 +50,9 @@ class App:
         s = self.settings.sync
         if kind == "backfill":
             return self.fetcher(s.backfill_budget_calls, gap_ms=max(s.backfill_call_gap_ms, s.min_call_gap_ms))
+        if kind == "fit":
+            f = self.settings.fit
+            return self.fetcher(f.backfill_budget_calls, gap_ms=max(f.call_gap_ms, s.min_call_gap_ms))
         return self.fetcher(s.background_budget_calls)
 
     @property

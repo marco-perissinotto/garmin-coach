@@ -21,6 +21,7 @@ class Tier(StrEnum):
     D = "D"  # single-day opt-in, TTL 24 h, background
     E = "E"  # profile-ish, TTL 7 d, background
     H = "H"  # history backfill, one-off
+    F = "F"  # FIT downloads (D-071): pseudo-tier, no TTL, never requested by the gate
 
 
 SYNC_TIERS = frozenset({Tier.A, Tier.B})
@@ -39,7 +40,7 @@ class Endpoint:
     name: str
     path: str
     kind: Kind
-    domain: str  # normalization domain: activities | daily | sleep | hrv | weight | profile | raw
+    domain: str  # normalization domain: activities | daily | sleep | hrv | weight | profile | raw | fit
     invoke: Invoke = field(repr=False, compare=False)
     cap_days: int | None = None
     optional_flag: str | None = None  # key in settings.optional_endpoints
@@ -66,7 +67,8 @@ _ALL: list[Endpoint] = [
              lambda c, a: c.get_activity(a["activity_id"])),
     Endpoint(3, "activity.workouts", "/activity-service/activity/{activityId}/workouts", "activity", "raw",
              lambda c, a: c.get_activity_workouts(a["activity_id"])),
-    Endpoint(4, "activity.download", "/download-service/files/activity/{activityId}", "activity", "raw",
+    # The only endpoint whose body is bytes (a ZIP), not JSON: parsed by garmin_coach.fit, never stored in raw_payload.
+    Endpoint(4, "activity.download", "/download-service/files/activity/{activityId}", "activity", "fit",
              lambda c, a: c.download_activity(a["activity_id"])),
     Endpoint(5, "usersummary.daily", "/usersummary-service/usersummary/daily", "day", "daily",
              lambda c, a: c.get("/usersummary-service/usersummary/daily", params={"calendarDate": a["date"]}),
@@ -140,4 +142,5 @@ TIER_ENDPOINTS: dict[Tier, tuple[str, ...]] = {
         "wellnessactivity.range", "weight.all", "weightgoal.range", "hrzones", "fitnessage.daily",
         "profile.settings",
     ),
+    Tier.F: ("activity.download",),
 }

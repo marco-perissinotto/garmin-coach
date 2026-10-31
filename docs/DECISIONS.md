@@ -256,3 +256,83 @@ dates of another. "Today" always comes from the injectable clock (`load_inputs(p
 initial state from state-like lines found in `coach-notes.md`; the owner deletes those lines by hand. The note tool
 stays append-only (no delete surface), there is no DB migration, and `doctor` does not try to classify note lines:
 it only reports the state file as absent ("none yet"), unreadable, or present with its age and size.
+
+## Phase 5a: FIT ingestion (2026-10-31)
+
+The design document `PLAN-FIT.md` guided the implementation and was removed afterwards, as the coaching-state design
+was: `FIT.md` holds the schema and the ingestion rules, these entries hold the decisions and the deviations.
+
+**D-070 Storage: ZIP on disk + one JSON column.** As designed: the ZIP is the raw layer
+(`<app data>/fit/<activityId>.zip`, kept by default), the summary is `activity_fit.data` (JSON) with scalar columns for
+status and counts; no per-lap/per-record tables; bytes never go to `raw_payload`. Schema v4 adds `activity_fit` and
+`app_flag` without a rebuild (an existing v3 database keeps every row, tested).
+
+**D-071 Downloads are pseudo-tier F.** As specified: a 404, a parse error, a 5xx or a budget stop on a download only
+adds F to the failed tiers; A completes on search + detail + workouts. F is not in `REFRESH_TIERS`, has no TTL (the
+runner treats it like H: never skipped as "fresh") and the gate never requests it. Downloads wait in a second queue
+that runs only when the main one is empty, so paging and detail calls always go first, across pages too.
+Consequence: the first tier A refresh after the upgrade also downloads the FITs of the activities of the last 28 days
+(one call each, after the calls that complete A, inside the 30-call / 25 s synchronous budget); what does not fit is
+picked up by the next refresh.
+
+**D-072 Fetched once.** As specified. "Tried" = `sync_state` status 2xx or 4xx except 429: a 400 is not retried,
+429 and 5xx are (planner and `pending_ids` share the rule). A parse failure keeps the ZIP (`parse_error`) and is fixed
+offline by `fit reparse`.
+
+**D-073 Historical FIT backfill = job kind `fit`.** As specified (whole plan newest first, budget-limited, chained,
+yielding, never auto-started). `fit backfill` and `refresh(scope="fit")` refuse when `fit.download` is false.
+
+**D-074 Parser pure and versioned.** As specified: `fit/parse.py` has no DB, paths or content logging and imports the
+SDK lazily (the MCP boot and `context show --offline` never load it, checked). `normalize --all` does not re-parse; it
+restores `activity.has_fit` from `activity_fit`.
+
+**D-075 Privacy and size.** As specified. Measured on the synthetic 31-minute interval file (1 870 records, 11 laps):
+8.8 KB of JSON with series, 0.1 s to decode.
+
+**D-076 Settings move.** As specified: `fit:` block, `SyncSettings.download_fit` removed. An old `sync.download_fit`
+key is ignored (the models allow extra keys) and `doctor` warns about it.
+
+**D-077 Small additions to the FitSummary.** (a) Computed zones (`source: "computed"`) carry `floors_bpm` (the Garmin
+zone floors used) instead of `boundaries_bpm`: they are floors, not the device's high boundaries. (b) `device.sensors`
+lists only `antplus_device_type` / `ble_device_type` names: `source_type` names the transport (`antplus`, `local`),
+not a sensor. (c) `records.power_source` is omitted instead of `null` (the "never null" rule of §5). (d)
+`fit.files_mb` in the status is a float with one decimal. (e) `meta.profile_version` comes from the file header
+(÷1000 from 22.0, ÷100 before, the SDK's rule). No key was renamed or removed.
+
+**D-078 `workout_rpe` is not scaled by the SDK.** The design expected the SDK to turn a stored 70 into 7.0; in
+profile 21.218 the field has scale 1, so the SDK returns 70. `session.rpe` = value ÷ 10 when above 10. `feel` is kept
+as stored (0-100: Garmin's five steps 0/25/50/75/100), not mapped to 1-5. To confirm on a real file with an RPE.
+
+**D-079 `fit.store` API: `prepare` + `save`.** The design had `ingest` write the file, parse and upsert, and the
+runner call it inside `BEGIN IMMEDIATE`. Decoding inside the transaction would hold the SQLite write lock for the
+parse time (seconds for a long ride), blocking every other writer (the gate of another process). The
+runner calls `prepare` (write the file, parse; reads only) before `BEGIN` and `save` (row + `has_fit`) inside it,
+with `sync_state`; `ingest` = `prepare` + `save` for the CLI and tests. `hr_zones` is the list of the five zone floors,
+looked up per sport (`RUNNING`/`CYCLING`/`SWIMMING` zones when Garmin has them, else `DEFAULT`). `parser_version` is
+stored for `no_fit` rows too (NULL only for `not_found`), so `fit reparse` does not revisit them forever.
+
+**D-080 `get_activity` lazy fetch.** `_lazy_detail` became `_lazy_fetch(conn, row)`: it now runs also on an activity
+that has its detail but no FIT attempt (1 call), skips the download while tier F is in cooldown, and reports
+`detail_problem` and `fit_problem` separately (`fit_status` stays `not_downloaded` after a failed download, which is
+retried on a later request).
+
+**D-081 Yielding without losing the chain.** Three amendments to the designed yield scheme, found while writing the job tests:
+(a) a fit job does not take the lock while `sync_wanted_at` is fresh (it waits, at most 30 s since the flag then goes
+stale), and a fit job that yielded is continued even with 0 calls done: otherwise a continuation that wins the race
+with the gate yields at once and the chain ends. (b) Refresh and backfill jobs that find the lock busy also set the
+flag while they wait (the design said background jobs do not): `fit backfill --background` runs in its own process, so
+without it the MCP server's background C/D/E refresh would fail `locked` during the whole chain. (c) A fit job retries
+the lock up to 10 times with `sync.lock_wait_seconds` each (the design said 5 s apart), i.e. it waits for a background
+refresh of ~60 calls instead of failing `locked`. The flag is cleared by whoever set it; two concurrent waiters may
+clear each other's flag, which only costs a later yield.
+
+**D-082 Test fixtures.** `tests/fitgen.py` builds every FIT with `garmin_fit_sdk.Encoder` (no binary committed): an
+11-lap interval ride with time_in_zone, a creator device and an HR strap, plus variants (running, developer power
+field, timer pause, no positions, session-level zones). The sync tests use a 110-record variant so that a backfill
+with ~12 downloads stays fast. `FakeGarmin` serves it for `activity.download` (`no_fit_ids` → 404, `bad_zip_ids` →
+random bytes, `gpx_ids` → a ZIP with a `.gpx`).
+
+**D-083 Live findings.** To be filled in after the owner's live run: ZIP member naming and the answer
+for multisport children / manual entries / GPX uploads; whether session TSS, TE and training load peak are present;
+the meaning of `time_in_hr_zone[0]`; the shape of `left_right_balance`; decode time per file; 429 behaviour of a
+100-call fit job at 1.5 s; disk use after the full backfill.

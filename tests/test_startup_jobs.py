@@ -8,11 +8,14 @@ from datetime import timedelta
 from fakes import FakeClock, FakeGarmin
 
 from garmin_coach.clock import iso
+from garmin_coach.fit import store as fit_store
 from garmin_coach.garmin.endpoints import REFRESH_TIERS, Tier
 from garmin_coach.settings import Paths, Settings
 from garmin_coach.store import db, repo
 from garmin_coach.sync import jobs as jobs_mod
+from garmin_coach.sync.freshness import FreshnessGate
 from garmin_coach.sync.jobs import JobManager
+from garmin_coach.sync.lock import RefreshLock
 from garmin_coach.sync.runner import Runner
 from garmin_coach.sync.startup import startup_check
 
@@ -204,3 +207,148 @@ def test_budget_limited_backfill_chains_until_done(paths, settings, clock) -> No
     seen = [key(x) for fg in f.made for x in fg.log]
     assert len(seen) == len(set(seen))  # chained jobs never refetch a slice
     assert sum(fg.calls_made for fg in f.made) <= 200
+
+
+# -- fit jobs (D-073, D-081) -------------------------------------------------------------------------------------
+def warm_without_fit(paths: Paths, settings: Settings, clock: FakeClock) -> int:
+    """History loaded with FIT downloads off; returns the number of activities a fit backfill must try."""
+    conn = db.connect(paths.db)
+    settings.fit.download = False
+    Runner(conn, settings, FakeGarmin(), clock=clock).run({Tier.H})
+    Runner(conn, settings, FakeGarmin(), clock=clock).run(set(REFRESH_TIERS))
+    settings.fit.download = True
+    settings.fit.backfill_days = 60  # ~25 activities keep the test fast
+    n = len(fit_store.pending_ids(conn, settings, clock().astimezone().date()))
+    conn.close()
+    return n
+
+
+def follow_chain(m: JobManager, first: int) -> list[dict]:
+    chain = [m.wait(first, timeout=60)]
+    while chain[-1]["status"] == "partial":
+        nxt = m.has_active(kind="fit")
+        assert nxt is not None, "partial fit job was not continued"
+        chain.append(m.wait(nxt["id"], timeout=60))
+    return chain
+
+
+def test_fit_jobs_chain_on_budget_until_every_activity_is_tried(paths, settings, clock) -> None:  # type: ignore[no-untyped-def]
+    n = warm_without_fit(paths, settings, clock)
+    f = JobFetchers(budget=10)
+    m = manager(paths, settings, clock, f)
+    chain = follow_chain(m, m.enqueue("fit", {Tier.F}, "cli"))
+    assert chain[-1]["status"] == "done" and len(chain) == n // 10 + 1
+    assert "continued by" in (chain[0]["notes"] or "") and "budget" in (chain[0]["error"] or "")
+    ids = [a["activity_id"] for name, a in f.log if name == "activity.download"]
+    assert len(ids) == len(set(ids)) == n
+    assert m.conn.execute("SELECT COUNT(*) FROM activity_fit WHERE status='ok'").fetchone()[0] == n
+    assert len(list(paths.fit_dir.glob("*.zip"))) == n  # the job keeps the files
+
+
+def test_fit_job_yields_to_an_on_demand_refresh_and_continues(paths, settings, clock) -> None:  # type: ignore[no-untyped-def]
+    n = warm_without_fit(paths, settings, clock)
+    flag_conn = db.connect(paths.db)
+
+    def want_sync_at_call_5(args) -> None:  # type: ignore[no-untyped-def]
+        if f.made[0].calls_made == 5 and not repo.get_flag(flag_conn, repo.SYNC_WANTED):
+            repo.set_flag(flag_conn, repo.SYNC_WANTED, iso(clock()))
+
+    class Hooked(JobFetchers):
+        def __call__(self, kind: str) -> FakeGarmin:
+            fg = super().__call__(kind)
+            if len(self.made) == 1:
+                fg.errors["*"] = want_sync_at_call_5
+            return fg
+
+    f = Hooked()
+    m = manager(paths, settings, clock, f)
+    first = m.wait(m.enqueue("fit", {Tier.F}, "mcp"), timeout=60)
+    assert first["status"] == "partial" and first["error"] == "yielded: on-demand refresh waiting"
+    assert first["calls_done"] == 5 and "continued by" in first["notes"]
+    cont = m.has_active(kind="fit")
+    assert cont is not None and cont["trigger"] == "mcp"
+    repo.clear_flag(flag_conn, repo.SYNC_WANTED)  # the refresh is over
+    chain = follow_chain(m, cont["id"])
+    assert chain[-1]["status"] == "done"
+    assert sum(fg.counts()["activity.download"] for fg in f.made) == n
+    flag_conn.close()
+
+
+def test_fit_continuation_retries_the_lock(paths, settings, clock) -> None:  # type: ignore[no-untyped-def]
+    warm_without_fit(paths, settings, clock)
+    settings.sync.lock_wait_seconds = 0.2
+    holder = RefreshLock(paths.lock)
+    assert holder.acquire(1)
+    m = manager(paths, settings, clock, JobFetchers())
+    jid = m.enqueue("fit", {Tier.F}, "cli")
+    threading.Event().wait(1.0)  # ~4 failed attempts of 0.2 s: a non-fit job would have failed 'locked'
+    holder.release()
+    job = m.wait(jid, timeout=60)
+    assert job["status"] == "done" and job["error"] is None  # not failed 'locked'
+
+
+def test_cancel_stops_the_fit_chain(paths, settings, clock) -> None:  # type: ignore[no-untyped-def]
+    warm_without_fit(paths, settings, clock)
+    m = manager(paths, settings, clock, JobFetchers(slow=0.05))
+    jid = m.enqueue("fit", {Tier.F}, "cli")
+    while (jobs_mod.get_job(m.conn, jid)["calls_done"] or 0) < 2:
+        threading.Event().wait(0.01)
+    jobs_mod.request_cancel(m.conn, jid)
+    assert m.wait(jid, timeout=30)["status"] == "cancelled"  # type: ignore[index]
+    assert m.has_active(kind="fit") is None
+
+
+def test_startup_never_enqueues_a_fit_job(paths, settings, clock) -> None:  # type: ignore[no-untyped-def]
+    n = warm_without_fit(paths, settings, clock)
+    assert n > 0
+    m = manager(paths, settings, clock, JobFetchers())
+    clock.advance(hours=2)
+    jid = startup_check(m, settings, clock=clock)
+    assert jid is not None and jobs_mod.get_job(m.conn, jid)["kind"] == "refresh"  # type: ignore[index]
+    m.wait(jid, timeout=30)
+    assert {j["kind"] for j in jobs_mod.list_jobs(m.conn)} == {"refresh"}
+
+
+def test_sync_wanted_flag_set_by_the_gate_and_stale_after_30_s(paths, settings, clock) -> None:  # type: ignore[no-untyped-def]
+    warm_without_fit(paths, settings, clock)
+    conn = db.connect(paths.db)
+    seen: list[str | None] = []
+
+    def fetchers(budget: int, timeout: float | None = None) -> FakeGarmin:
+        fg = FakeGarmin(budget=budget)
+        fg.errors["*"] = lambda args: seen.append(repo.get_flag(conn, repo.SYNC_WANTED))
+        return fg
+
+    clock.advance(hours=2)
+    fr = FreshnessGate(paths, settings, conn, fetcher_factory=fetchers, clock=clock).ensure_fresh({Tier.A, Tier.B},
+                                                                                                  trigger="mcp")
+    assert fr.tiers["A"].refreshed_now and seen and all(v == iso(clock()) for v in seen)
+    assert repo.get_flag(conn, repo.SYNC_WANTED) is None  # cleared after the lock is released
+    # A flag left behind by a crashed process is ignored after 30 s: the fit job neither waits nor yields
+    repo.set_flag(conn, repo.SYNC_WANTED, iso(clock() - timedelta(seconds=31)))
+    assert not repo.sync_wanted(conn, clock())
+    m = manager(paths, settings, clock, JobFetchers())
+    job = m.wait(m.enqueue("fit", {Tier.F}, "cli"), timeout=30)
+    assert job["status"] == "done" and job["error"] is None  # type: ignore[index]
+    conn.close()
+
+
+def test_refresh_job_waiting_for_the_lock_asks_a_fit_chain_to_yield(paths, settings, clock) -> None:  # type: ignore[no-untyped-def]
+    warm_without_fit(paths, settings, clock)
+    settings.sync.lock_wait_seconds = 1
+    conn = db.connect(paths.db)
+    holder = RefreshLock(paths.lock)  # stands in for a fit job of another process
+    assert holder.acquire(1)
+    m = manager(paths, settings, clock, JobFetchers())
+    jid = m.enqueue("refresh", {Tier.C}, "gate", force=True)
+    flags = []
+    for _ in range(40):
+        flags.append(repo.get_flag(conn, repo.SYNC_WANTED))
+        if flags[-1]:
+            break
+        threading.Event().wait(0.02)
+    holder.release()
+    assert any(flags)
+    assert m.wait(jid, timeout=30)["status"] == "done"  # type: ignore[index]
+    assert repo.get_flag(conn, repo.SYNC_WANTED) is None
+    conn.close()

@@ -5,6 +5,7 @@
 3. refresh lock, waiting up to lock_wait_seconds, then double-check tier_state
 4. stale A/B refreshed synchronously (30-call budget, 25 s wall clock)
 5. stale C/D/E refreshed by one background job (or synchronously in CLI mode)
+   (3-4 set the ``sync_wanted_at`` flag while waiting for the lock, so a running fit job yields)
 6. never fail the consumer: errors are recorded and cached data is served flagged stale
 """
 
@@ -19,7 +20,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..clock import Clock, system_clock
+from ..clock import Clock, iso, system_clock
 from ..garmin.endpoints import BACKGROUND_TIERS, SYNC_TIERS, Tier
 from ..garmin.errors import Fetcher
 from ..secrets import redact
@@ -169,18 +170,23 @@ class FreshnessGate:
             # 3-4. synchronous tiers under the lock, with double-check
             if sync_part:
                 lock = RefreshLock(self.paths.lock)
-                if lock.acquire(self.settings.sync.lock_wait_seconds):
-                    try:
-                        states = repo.tier_states(self.conn)
-                        now = self.clock()
-                        sync_part = self._stale(sync_part, states, now, max_age)
-                        if sync_part:
-                            refreshed |= self._run_sync(sync_part, max_age, reasons)
-                    finally:
-                        lock.release()
-                else:
-                    for t in sync_part:
-                        reasons[t] = "refresh in progress elsewhere (lock busy)"
+                # A running fit job yields within one call when it sees this flag (D-081).
+                repo.set_flag(self.conn, repo.SYNC_WANTED, iso(self.clock()))
+                try:
+                    if lock.acquire(self.settings.sync.lock_wait_seconds):
+                        try:
+                            states = repo.tier_states(self.conn)
+                            now = self.clock()
+                            sync_part = self._stale(sync_part, states, now, max_age)
+                            if sync_part:
+                                refreshed |= self._run_sync(sync_part, max_age, reasons)
+                        finally:
+                            lock.release()
+                    else:
+                        for t in sync_part:
+                            reasons[t] = "refresh in progress elsewhere (lock busy)"
+                finally:
+                    repo.clear_flag(self.conn, repo.SYNC_WANTED)
 
             # 5. background tiers
             if bg_part:
@@ -212,9 +218,8 @@ class FreshnessGate:
         fetcher = self.fetcher_factory(budget, timeout)
         try:
             force = max_age is not None and all(max_age.get(t, timedelta(1)) <= timedelta(0) for t in tiers)
-            res = Runner(self.conn, self.settings, fetcher, clock=self.clock,
-                         on_finished=self.post_run).run(tiers, force=force,
-                                                                                  max_age=max_age)
+            res = Runner(self.conn, self.settings, fetcher, clock=self.clock, on_finished=self.post_run,
+                         paths=self.paths).run(tiers, force=force, max_age=max_age)
         finally:
             fetcher.close()
         for t in tiers - res.tiers_completed:

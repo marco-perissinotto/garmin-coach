@@ -12,6 +12,7 @@ import os
 import socket
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
@@ -21,14 +22,17 @@ from ..garmin.endpoints import Tier
 from ..garmin.errors import Fetcher, GarminError
 from ..secrets import redact
 from ..settings import Paths, Settings
+from ..store import repo
 from .lock import RefreshLock
-from .runner import Progress, Runner
+from .runner import YIELDED, Progress, Runner
 
 log = logging.getLogger(__name__)
 
 ACTIVE = ("queued", "running")
 TERMINAL = ("done", "partial", "failed", "cancelled")
 EXIT_CODES = {"done": 0, "partial": 2, "failed": 1, "cancelled": 1}
+CHAINED_KINDS = ("backfill", "fit")  # budget-limited kinds that continue in a new job (D-033, D-073)
+FIT_LOCK_TRIES = 10  # a fit continuation waits for the refresh it yielded to instead of failing 'locked'
 
 FetcherFactory = Callable[[str], Fetcher]  # kind -> fetcher with the right budget
 ConnFactory = Callable[[], sqlite3.Connection]
@@ -153,7 +157,7 @@ class JobManager:
         self.conn = conn_factory()
         self._cv = threading.Condition()
         self._worker: threading.Thread | None = None
-        self._requeued: set[int] = set()
+        self._requeued: dict[int, int] = {}  # job id -> lock attempts that failed
 
     # -- API ------------------------------------------------------------------------------------------------------
     def enqueue(self, kind: str, tiers: set[Tier] | frozenset[Tier], trigger: str, *, force: bool = False) -> int:
@@ -226,13 +230,33 @@ class JobManager:
             with self._cv:
                 self._cv.notify_all()
 
+    def _wait_until_not_wanted(self, conn: sqlite3.Connection) -> None:
+        """A fit job does not start while an on-demand refresh is waiting for the lock (bounded: the flag goes
+        stale after SYNC_WANTED_MAX_AGE_S), so a continuation does not yield again right away."""
+        deadline = time.monotonic() + repo.SYNC_WANTED_MAX_AGE_S
+        while repo.sync_wanted(conn, self.clock()) and time.monotonic() < deadline:
+            time.sleep(0.2)
+
     def _run_job(self, conn: sqlite3.Connection, job: dict[str, Any]) -> None:
         job_id = job["id"]
+        fit = job["kind"] == "fit"
+        if fit:
+            self._wait_until_not_wanted(conn)
         lock = RefreshLock(self.paths.lock)
-        if not lock.acquire(self.settings.sync.lock_wait_seconds):
-            if job_id not in self._requeued:
-                self._requeued.add(job_id)
-                conn.execute("UPDATE job SET notes='lock busy, re-queued once' WHERE id=?", (job_id,))
+        got = lock.acquire(0)
+        if not got:
+            if not fit:  # e.g. a `fit backfill --background` chain in another process: ask it to yield (D-081)
+                repo.set_flag(conn, repo.SYNC_WANTED, iso(self.clock()))
+            try:
+                got = lock.acquire(self.settings.sync.lock_wait_seconds)
+            finally:
+                if not fit:
+                    repo.clear_flag(conn, repo.SYNC_WANTED)
+        if not got:
+            tries = self._requeued.get(job_id, 0) + 1
+            self._requeued[job_id] = tries
+            if tries < (FIT_LOCK_TRIES if fit else 2):
+                conn.execute("UPDATE job SET notes=? WHERE id=?", (f"lock busy, re-queued ({tries})", job_id))
                 return  # still 'queued': picked again on the next loop
             conn.execute("UPDATE job SET status='failed', error='locked', finished_at=? WHERE id=?",
                          (iso(self.clock()), job_id))
@@ -271,19 +295,27 @@ class JobManager:
             conn.execute("UPDATE job SET status='failed', error=?, finished_at=? WHERE id=?",
                          (str(exc)[:500], iso(self.clock()), job_id))
             return
+
+        def wanted() -> bool:
+            return repo.sync_wanted(conn, self.clock())
+
         try:
-            res = Runner(conn, self.settings, fetcher, clock=self.clock, progress=progress,
-                         cancel_check=cancelled, on_finished=self.post_run).run(tiers, force=bool(job["force"]))
+            res = Runner(conn, self.settings, fetcher, clock=self.clock, progress=progress, cancel_check=cancelled,
+                         on_finished=self.post_run, paths=self.paths,
+                         yield_check=wanted if job["kind"] == "fit" else None).run(tiers, force=bool(job["force"]))
         finally:
             fetcher.close()
         finished = iso(self.clock())
         notes = f"http_calls={res.http_calls}"
-        # A backfill that stopped only because of its call budget continues in a new job (same trigger), so a
-        # long history loads in one go instead of waiting for the next process start (PLAN §6.2, §6.7).
-        # Enqueued *before* this job turns terminal, so whoever sees 'partial' also sees the continuation.
-        if (job["kind"] == "backfill" and res.status == "partial" and res.calls_done > 0 and res.error
-                and "budget" in res.error and not cancelled()):
-            nxt = self.enqueue("backfill", tiers, job["trigger"], force=bool(job["force"]))
+        # A backfill or fit job that stopped only because of its call budget (or, for fit, because an on-demand
+        # refresh wanted the lock) continues in a new job (same trigger), so a long history loads in one go instead
+        # of waiting for the next process start (PLAN §6.2, §6.7, D-073). Enqueued *before* this job turns
+        # terminal, so whoever sees 'partial' also sees the continuation.
+        error = res.error or ""
+        budget = res.calls_done > 0 and "budget" in error
+        if (job["kind"] in CHAINED_KINDS and res.status == "partial" and (budget or error == YIELDED)
+                and not cancelled()):
+            nxt = self.enqueue(job["kind"], tiers, job["trigger"], force=bool(job["force"]))
             notes += f" -> continued by #{nxt}"
         conn.execute(
             "UPDATE job SET status=?, finished_at=?, heartbeat_at=?, error=?, calls_planned=?, calls_done=?, "

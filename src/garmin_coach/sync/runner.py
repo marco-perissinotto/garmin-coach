@@ -1,6 +1,8 @@
 """Executes a plan: fetch -> raw_payload -> sync_state, then normalize and update tier_state (PLAN §6.2-6.4).
 
-The runner does not take the refresh lock; callers (jobs, freshness gate) do.
+The runner does not take the refresh lock; callers (jobs, freshness gate) do. FIT downloads (tier F) wait in a
+second queue that runs only when the main one is empty, so the calls that complete tier A always go first
+(D-071).
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from ..clock import Clock, system_clock
+from ..fit import store as fit_store
 from ..garmin import endpoints as ep
 from ..garmin.chunking import parse_range_key, range_key
 from ..garmin.endpoints import Tier
@@ -31,7 +34,7 @@ from ..garmin.errors import (
     ServerError,
 )
 from ..secrets import redact
-from ..settings import Settings
+from ..settings import Paths, Settings
 from ..store import repo
 from . import normalize
 from .planner import Call, Planner
@@ -42,6 +45,8 @@ log = logging.getLogger(__name__)
 BACKFILL_ALSO_COMPLETES = (Tier.A, Tier.C, Tier.E)
 # A 400 on a window this small is not a window-cap problem: the endpoint rejects the request for this account.
 MIN_HALVE_DAYS = 7
+DOWNLOAD = "activity.download"
+YIELDED = "yielded: on-demand refresh waiting"
 
 
 @dataclass
@@ -79,9 +84,15 @@ class Runner:
         progress: Callable[[Progress], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
         on_finished: Callable[[sqlite3.Connection], None] | None = None,
+        paths: Paths | None = None,
+        yield_check: Callable[[], bool] | None = None,
     ) -> None:
-        """``on_finished`` runs after a run that stored new payloads (metrics + context packs, PLAN §6.2)."""
+        """``on_finished`` runs after a run that stored new payloads (metrics + context packs, PLAN §6.2).
+        ``paths``: where FIT files are kept (``None``: not kept). ``yield_check``: checked before each call; when
+        true the run stops ``partial`` so an on-demand refresh can take the lock (fit jobs, D-073)."""
         self.on_finished = on_finished
+        self.paths = paths
+        self.yield_check = yield_check
         self.conn = conn
         self.settings = settings
         self.fetcher = fetcher
@@ -100,10 +111,12 @@ class Runner:
         now = self.clock()
         tiers = set(tiers)
         if calls is None and not force:
-            tiers = {t for t in tiers if t == Tier.H or self._tier_stale(t, now, max_age)}
+            tiers = {t for t in tiers if t in (Tier.H, Tier.F) or self._tier_stale(t, now, max_age)}
         planner = Planner(self.conn, self.settings, now, force=force, max_age=max_age)
-        queue = deque(calls if calls is not None else planner.plan(tiers))
-        res = RunResult(status="done", calls_planned=len(queue))
+        planned = calls if calls is not None else planner.plan(tiers)
+        queue = deque(c for c in planned if c.endpoint != DOWNLOAD)
+        deferred = deque(c for c in planned if c.endpoint == DOWNLOAD)  # heavier, never needed to complete A
+        res = RunResult(status="done", calls_planned=len(planned))
         failed_tiers: set[Tier] = set()
         repo.mark_tier_attempt(self.conn, (t.value for t in tiers), now)
         stop_reason: str | None = None
@@ -112,14 +125,19 @@ class Runner:
             self.progress(Progress(res.calls_planned, res.calls_done, res.calls_failed, step))
 
         report("planned")
-        while queue:
+        while queue or deferred:
             if self.cancel_check():
                 res.status, stop_reason = "cancelled", "cancelled"
                 break
-            call = queue.popleft()
+            if self.yield_check is not None and self.yield_check():
+                res.status, stop_reason = "partial", YIELDED
+                break
+            source = queue if queue else deferred
+            call = source.popleft()
             report(call.step)
             t0 = time.monotonic()
             status: int | None = None
+            body: object = None
             try:
                 body = self.fetcher.fetch(ep.get(call.endpoint), call.args)
                 status = 200 if body is not None else 204
@@ -135,11 +153,12 @@ class Runner:
                     # Next search page first, so paging finishes before detail calls use up the budget.
                     pages = [c for c in follow if c.endpoint == "activities.search"]
                     queue.extendleft(reversed(pages))
-                    queue.extend(c for c in follow if c.endpoint != "activities.search")
+                    queue.extend(c for c in follow if c.endpoint not in ("activities.search", DOWNLOAD))
+                    deferred.extend(c for c in follow if c.endpoint == DOWNLOAD)
                     res.calls_planned += len(follow)
             except NotFoundError:
                 status = 404
-                repo.set_sync_state(self.conn, call.endpoint, call.key, 404, self.clock(), note="no data")
+                self._not_found(call)
                 res.calls_done += 1
             except BadRequestError as exc:
                 status = 400
@@ -164,7 +183,7 @@ class Runner:
                     res.calls_failed += 1
                     failed_tiers.add(call.tier)
             except (BudgetExhaustedError, DeadlineExceededError) as exc:
-                queue.appendleft(call)
+                source.appendleft(call)
                 res.status, stop_reason = "partial", str(exc)
                 break
             except CircuitOpenError as exc:
@@ -201,13 +220,13 @@ class Runner:
                 failed_tiers.add(call.tier)
                 log.warning("call failed: %s", exc)
             finally:
+                size = f" bytes={len(body)}" if isinstance(body, bytes | bytearray) else ""
                 log.info(
-                    "GET %s key=%s status=%s ms=%d", call.endpoint, call.key, status,
-                    int((time.monotonic() - t0) * 1000),
+                    "GET %s key=%s status=%s ms=%d%s", call.endpoint, call.key, status,
+                    int((time.monotonic() - t0) * 1000), size,
                 )
 
-        if queue:
-            failed_tiers.update(c.tier for c in queue)
+        failed_tiers.update(c.tier for c in (*queue, *deferred))
         if res.status == "done" and res.calls_failed:
             res.status = "partial"
         res.http_calls = getattr(self.fetcher, "calls_made", 0)
@@ -251,6 +270,9 @@ class Runner:
     def _store(self, call: Call, body: object, status: int, res: RunResult) -> None:
         """raw + sync_state + normalization in one transaction: a killed process never leaves a slice marked as
         fetched but missing from the normalized tables."""
+        if call.endpoint == DOWNLOAD:
+            self._store_fit(call, body, status)
+            return
         ts = self.clock()
         self.conn.execute("BEGIN IMMEDIATE")
         try:
@@ -259,6 +281,43 @@ class Runner:
                 normalize.apply_ids(self.conn, [raw_id])
                 res.raw_ids.append(raw_id)
             repo.set_sync_state(self.conn, call.endpoint, call.key, status, ts)
+            self.conn.execute("COMMIT")
+        except BaseException:
+            self.conn.execute("ROLLBACK")
+            raise
+
+    def _store_fit(self, call: Call, body: object, status: int) -> None:
+        """A ZIP: kept on disk and parsed *before* the transaction (the write lock is never held while decoding),
+        then activity_fit + activity.has_fit + sync_state commit together. Bytes never go to raw_payload."""
+        aid = int(call.args["activity_id"])
+        prepared = None
+        if isinstance(body, bytes | bytearray) and body:
+            prepared = fit_store.prepare(self.paths, self.settings, aid, bytes(body),
+                                         hr_zones=fit_store.zone_floors(self.conn, aid))
+        ts = self.clock()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            if prepared is not None:
+                result = fit_store.save(self.conn, prepared, ts)
+                if result != "ok":
+                    log.warning("FIT of activity %d: %s (%s)", aid, result, prepared.result.error)
+            else:
+                fit_store.mark(self.conn, aid, "not_found", ts, "empty response")
+            repo.set_sync_state(self.conn, call.endpoint, call.key, status, ts)
+            self.conn.execute("COMMIT")
+        except BaseException:
+            self.conn.execute("ROLLBACK")
+            raise
+
+    def _not_found(self, call: Call) -> None:
+        ts = self.clock()
+        if call.endpoint != DOWNLOAD:
+            repo.set_sync_state(self.conn, call.endpoint, call.key, 404, ts, note="no data")
+            return
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            fit_store.mark(self.conn, int(call.args["activity_id"]), "not_found", ts)
+            repo.set_sync_state(self.conn, call.endpoint, call.key, 404, ts, note="no file")
             self.conn.execute("COMMIT")
         except BaseException:
             self.conn.execute("ROLLBACK")

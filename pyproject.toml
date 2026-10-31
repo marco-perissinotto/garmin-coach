@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "filelock>=4.2.4",
+    "garmin-fit-sdk>=21.218.0",
     "garmin-connect-personal-api-python>=1.0.0",
     "jinja2>=3.1.6",
     "mcp>=2.3.0",

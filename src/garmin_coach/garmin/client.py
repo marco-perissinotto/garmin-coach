@@ -146,6 +146,12 @@ class GarminClient:
                 status = exc.status_code
                 self.last_status = status
                 body = " ".join((exc.response_text or "").split())[:200]
+            except GarminPersonalApiError:
+                # Not an HTTP error: the only known case is download_activity's "original activity file response
+                # was empty", i.e. no file for this activity (PLAN-FIT §6.2).
+                self.last_status = 404
+                self.consecutive_429 = 0
+                raise NotFoundError(f"{endpoint.name}: empty response", 404) from None
             except requests.RequestException as exc:
                 self.last_status = None
                 if attempt < 2:

@@ -27,7 +27,9 @@ INSTRUCTIONS = """Local Garmin Connect data of one athlete (the user), cached on
 Start a coaching conversation with get_daily_brief and get_athlete_profile; use get_events for planning. Every data
 tool returns a `freshness` object: if `stale` is true or `history_loaded` is false, tell the user before advising.
 Readiness is a local heuristic, not Garmin's Training Readiness. Units: distances in metres (or km when the field name
-says so), durations in seconds (or as stated), heart rate in bpm, power in watts, HRV in ms. Pack texts are Italian."""
+says so), durations in seconds (or as stated), heart rate in bpm, power in watts, HRV in ms. Pack texts are Italian.
+Per-activity FIT data (laps, intervals, HR/power zones, dynamics, decoupling) is in `get_activity.fit` when `fit_status`
+is `ok`; `refresh(scope="fit")` loads the past."""
 
 MaxAge = Annotated[int | None, Field(
     description="Maximum acceptable cache age in minutes. Omit for the default TTL; 0 forces a refresh from Garmin "
@@ -166,16 +168,28 @@ def build_server(app: App, *, http_token: str | None = None, port: int = 8765) -
                         limit: Annotated[int, Field(ge=1, le=100)] = 20,
                         max_age_minutes: MaxAge = None) -> dict[str, Any]:
         """Activities newest first: id, date/time, type, duration, distance, pace or speed, HR avg/max, power,
-        elevation gain, training load and training effect. Use the id with get_activity for details."""
+        elevation gain, training load and training effect, has_fit (FIT analysis available). Use the id with
+        get_activity for details."""
         return service.list_activities(start, end, type, limit, max_age_minutes)
 
     @mcp.tool()
-    def get_activity(activity_id: int, include_splits: bool = False, max_age_minutes: MaxAge = None) -> dict[str, Any]:
+    def get_activity(activity_id: int, include_splits: bool = False,
+                     include_laps: Annotated[bool, Field(description=(
+                         "Add fit.laps: per-lap time, distance, pace, HR, power, cadence, intensity (max 80)."))] = False,
+                     include_series: Annotated[bool, Field(description=(
+                         "Add fit.series: the session's shape in <= 48 time buckets (HR, power, speed, cadence, "
+                         "altitude). Only when the user asks how the session unfolded."))] = False,
+                     max_age_minutes: MaxAge = None) -> dict[str, Any]:
         """One activity in full: all summary fields (metres, seconds, m/s, bpm, watts), HR time in zones, power
         bests, TSS/IF and stamina from Garmin's detail, the structured workout followed (if any) and, with
-        include_splits, Garmin's split summaries (intervals, run/walk). Fetches the detail from Garmin the first
-        time for activities older than 28 days (2 calls)."""
-        return service.get_activity(activity_id, include_splits, max_age_minutes)
+        include_splits, Garmin's split summaries (intervals, run/walk). From the original FIT file, when
+        `fit_status` is "ok": `fit.session` (timer/elapsed time, averages, TE, RPE), `fit.zones` (time in HR and power
+        zones), `fit.intervals` (work vs rest laps with the fade from first to last rep; absent when the session had
+        no structured reps), `fit.dynamics` (running dynamics, pedal balance, swim stroke), `fit.records`
+        (data coverage, aerobic decoupling Pw:HR or Pa:HR in %), `fit.route` (start/end point), `fit.device`;
+        laps and series on request. Other `fit_status` values: not_downloaded, no_file, parse_error, disabled,
+        skipped_type. Fetches what is missing from Garmin the first time (detail, workouts, FIT: up to 3 calls)."""
+        return service.get_activity(activity_id, include_splits, include_laps, include_series, max_age_minutes)
 
     @mcp.tool()
     def get_sleep(date: DateArg = None, max_age_minutes: MaxAge = None) -> dict[str, Any]:
@@ -255,7 +269,8 @@ def build_server(app: App, *, http_token: str | None = None, port: int = 8765) -
     def get_sync_status() -> dict[str, Any]:
         """State of the local Garmin cache: whether history is loaded, age of each data tier vs its TTL,
         the running sync job with progress (calls_done/calls_planned) and ETA, recent jobs, cooldowns and last
-        error. Use it to answer "is my data up to date / loaded?". Never contacts Garmin."""
+        error, and `fit` (FIT files: ok / pending / no file / parse errors, disk use, running FIT job). Use it to answer
+        "is my data up to date / loaded?". Never contacts Garmin."""
         return service.get_sync_status()
 
     @mcp.tool()
@@ -263,8 +278,9 @@ def build_server(app: App, *, http_token: str | None = None, port: int = 8765) -
                     "A activities, B today's wellness, C last 7 days, D optional single-day data, E profile/zones. "
                     "Default all."))] = None,
                 force: Annotated[bool, Field(description="Refetch even if within the TTL.")] = False,
-                scope: Annotated[Literal["tiers", "history"], Field(description=(
-                    "history = (re)load the whole history in the background"))] = "tiers") -> dict[str, Any]:
+                scope: Annotated[Literal["tiers", "history", "fit"], Field(description=(
+                    "history = (re)load the whole history in the background; fit = download the FIT files of past "
+                    "activities in chained background jobs (force is ignored)"))] = "tiers") -> dict[str, Any]:
         """Start a background reload from Garmin and return its job_id immediately ("I just synced my watch":
         tiers A,B with force=true). Follow progress with get_sync_status. At most once per tier every 5 minutes;
         refused while Garmin is in cooldown (rate-limit protection)."""

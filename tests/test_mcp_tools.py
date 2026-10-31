@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,7 @@ from test_context import STATE, write_inputs, write_state
 
 from garmin_coach import state as state_m
 from garmin_coach.app import App
-from garmin_coach.garmin.client import NetworkError
+from garmin_coach.garmin.client import NetworkError, ServerError
 from garmin_coach.garmin.endpoints import REFRESH_TIERS, Tier
 from garmin_coach.mcp import prompts as prompts_mod
 from garmin_coach.mcp import tools as tools_mod
@@ -42,11 +43,14 @@ class Fetchers:
         self.broken = broken
         self.made: list[FakeGarmin] = []
         self.lock = threading.Lock()
+        self.setup: Callable[[FakeGarmin], None] | None = None
 
     def __call__(self, budget: int, timeout: float | None = None, gap_ms: int | None = None) -> FakeGarmin:
         f = FakeGarmin(budget=budget)
         if self.broken:
             f.errors["*"] = NetworkError("connection refused")
+        if self.setup is not None:
+            self.setup(f)
         with self.lock:
             self.made.append(f)
         return f
@@ -198,12 +202,110 @@ def test_get_activity_lazy_detail_does_not_touch_tier_a(warmed, clock: FakeClock
     clock.advance(minutes=5)
     r = svc.get_activity(old, include_splits=True)
     assert "error" not in r and r["activity"]["has_detail"] == 1 and "detail_problem" not in r
-    assert f.calls == 2 and {n for fg in f.made for n, _ in fg.log} == {"activity.detail", "activity.workouts"}
+    assert [n for fg in f.made for n, _ in fg.log] == ["activity.detail", "activity.workouts", "activity.download"]
+    assert r["fit_status"] == "ok" and r["activity"]["has_fit"] == 1 and "fit_problem" not in r
     assert repo.tier_states(conn)["A"]["last_completed_at"] == a_before
+    assert repo.get_flag(conn, repo.SYNC_WANTED) is None  # set while waiting for the lock, then cleared
     svc.get_activity(old)
-    assert f.calls == 2  # fetched once
+    assert f.calls == 3  # fetched once
     assert "not in the local cache" in svc.get_activity(42)["error"]
+    svc.app.settings.fit.download = False
+    older = conn.execute("SELECT activity_id FROM activity WHERE has_detail=0 ORDER BY start_local LIMIT 1").fetchone()[0]
+    r = svc.get_activity(older)
+    assert f.calls == 5 and r["fit_status"] == "disabled" and "fit" not in r  # 2 calls when FIT is disabled
     conn.close()
+
+
+# -- FIT in the tools (PLAN-FIT §8) -----------------------------------------------------------------------------------
+def _recent_with_fit(svc: CoachService) -> int:
+    conn = db.connect(svc.app.paths.db)
+    try:
+        return conn.execute("SELECT activity_id FROM activity WHERE has_fit=1 ORDER BY start_local DESC").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_get_activity_fit_sections_laps_and_series(warmed, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
+    svc, f = warmed
+    aid = _recent_with_fit(svc)  # downloaded during the history backfill (inside the 28-day detail window)
+    r = svc.get_activity(aid)
+    assert f.calls == 0 and r["fit_status"] == "ok"
+    fit = r["fit"]
+    assert set(fit) == {"meta", "session", "zones", "intervals", "dynamics", "records", "route", "device"}
+    assert fit["meta"] == {"parser_version": 1, "n_laps": 11, "n_records": 110, "laps_truncated": False,
+                           "truncated": False}
+    assert fit["intervals"]["work"]["n"] == 6 and fit["zones"]["source"] == "time_in_zone"
+    assert "laps" not in fit and "series" not in fit
+    full = svc.get_activity(aid, include_laps=True, include_series=True)["fit"]
+    assert len(full["laps"]) == 11 and "laps_more" not in full and full["series"]
+    monkeypatch.setattr(tools_mod, "MAX_LAPS_OUT", 4)
+    cut = svc.get_activity(aid, include_laps=True)["fit"]
+    assert len(cut["laps"]) == 4 and cut["laps_more"] is True
+    monkeypatch.setattr(tools_mod, "MAX_PAYLOAD_CHARS", 3000)
+    assert "too large" in svc.get_activity(aid, include_laps=True, include_series=True)["error"]
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("no_file", "no_file"), ("parse_error", "parse_error"), ("disabled", "disabled"),
+    ("skipped_type", "skipped_type"), ("cooldown", "not_downloaded"), ("5xx", "not_downloaded"),
+])
+def test_fit_status_values(paths, settings, clock, case: str, expected: str) -> None:  # type: ignore[no-untyped-def]
+    warm(paths, settings, clock)
+    f = Fetchers()
+    svc = CoachService(make_app(paths, settings, clock, f))
+    conn = db.connect(paths.db)
+    old = conn.execute("SELECT activity_id FROM activity WHERE has_detail=0 ORDER BY start_local LIMIT 1").fetchone()[0]
+    if case == "no_file":
+        f.setup = lambda fg: fg.no_fit_ids.add(old)
+    elif case == "parse_error":
+        f.setup = lambda fg: fg.bad_zip_ids.add(old)
+    elif case == "disabled":
+        settings.fit.download = False
+    elif case == "skipped_type":
+        settings.fit.skip_types = ["running"]
+    elif case == "cooldown":
+        repo.set_cooldown(conn, ["F"], clock() + timedelta(hours=1), "429s")
+    else:
+        f.setup = lambda fg: fg.errors.update({"activity.download": ServerError("HTTP 503 after 5 tries", 503)})
+    r = svc.get_activity(old)
+    conn.close()
+    assert r["fit_status"] == expected and "fit" not in r and r["activity"]["has_detail"] == 1
+    assert ("fit_problem" in r) == (case == "5xx")
+    if case == "5xx":
+        assert "HTTP 503" in r["fit_problem"]
+    downloads = sum(fg.counts()["activity.download"] for fg in f.made)
+    assert downloads == (1 if case in ("no_file", "parse_error", "5xx") else 0)
+
+
+def test_list_activities_has_fit_and_status_fit_block(warmed) -> None:  # type: ignore[no-untyped-def]
+    svc, _ = warmed
+    acts = svc.list_activities(limit=100)["activities"]
+    assert acts[0]["has_fit"] is True and acts[-1]["has_fit"] is False
+    st = svc.get_sync_status()["fit"]
+    n_ok = sum(a["has_fit"] for a in svc.list_activities(limit=100)["activities"])
+    assert st["enabled"] is True and st["ok"] == n_ok > 0 and st["pending"] > 0 and st["files_mb"] >= 0
+    assert st["parse_error"] == 0 and st["no_file"] == 0 and st["cooldown_until"] is None
+    assert "job" not in st and "last_job" not in st
+
+
+def test_refresh_scope_fit_guards(warmed, clock: FakeClock) -> None:  # type: ignore[no-untyped-def]
+    svc, _ = warmed
+    r = svc.refresh(scope="fit", force=True)
+    assert r["kind"] == "fit" and r["job_id"] and "chained jobs" in r["note"]
+    again = svc.refresh(scope="fit")
+    assert again.get("job_id") == r["job_id"] or "less than 5 minutes" in again.get("error", "")
+    wait_idle(svc, 60)
+    assert "less than 5 minutes" in svc.refresh(scope="fit")["error"]
+    st = svc.get_sync_status()["fit"]
+    assert st["last_job"]["status"] == "done" and st["pending"] == 0
+    clock.advance(minutes=6)
+    conn = db.connect(svc.app.paths.db)
+    repo.set_cooldown(conn, ["F"], clock() + timedelta(hours=1), "429s")
+    conn.close()
+    assert "cooldown" in svc.refresh(scope="fit")["error"]
+    svc.app.settings.fit.download = False
+    assert "disabled" in svc.refresh(scope="fit")["error"]
+    assert "scope must be" in svc.refresh(scope="everything")["error"]
 
 
 def test_list_and_range_tools(warmed) -> None:  # type: ignore[no-untyped-def]
@@ -318,8 +420,12 @@ def test_server_registers_everything_and_answers(warmed) -> None:  # type: ignor
 
     async def main() -> None:
         async with Client(server) as client:
-            tools = {t.name for t in (await client.list_tools()).tools}
+            listed = {t.name: t for t in (await client.list_tools()).tools}
+            tools = set(listed)
             assert tools == EXPECTED_TOOLS
+            props = listed["get_activity"].input_schema["properties"]
+            assert {"include_laps", "include_series", "include_splits"} <= set(props)
+            assert "fit" in listed["refresh"].input_schema["properties"]["scope"]["enum"]
             res = await client.call_tool("get_daily_brief", {})
             assert not res.is_error
             body = json.loads(res.content[0].text)  # type: ignore[union-attr]

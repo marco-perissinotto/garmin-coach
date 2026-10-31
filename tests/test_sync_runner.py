@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
 from fakes import FakeClock, FakeGarmin, range_days
 
-from garmin_coach.garmin.client import BadRequestError
+from garmin_coach.garmin.client import BadRequestError, ServerError
 from garmin_coach.garmin.endpoints import REFRESH_TIERS, Tier
 from garmin_coach.settings import Settings
 from garmin_coach.store import repo
@@ -100,12 +101,14 @@ def test_lazy_detail_for_old_activity(conn, settings: Settings, fake: FakeGarmin
     old = fake.activities[-30]["activityId"]
     assert conn.execute("SELECT has_detail FROM activity WHERE activity_id=?", (old,)).fetchone()[0] == 0
     planner = Planner(conn, settings, clock())
-    calls = planner.lazy_detail_calls(old)
+    calls = planner.lazy_activity_calls(old, want_fit=False)
     lazy = FakeGarmin()
     Runner(conn, settings, lazy, clock=clock).run({Tier.A}, calls=calls)
     assert lazy.calls_made == 2
     assert conn.execute("SELECT has_detail FROM activity WHERE activity_id=?", (old,)).fetchone()[0] == 1
-    assert Planner(conn, settings, clock()).lazy_detail_calls(old) == []
+    assert Planner(conn, settings, clock()).lazy_activity_calls(old, want_fit=False) == []
+    with_fit = Planner(conn, settings, clock()).lazy_activity_calls(old, want_fit=True)
+    assert [c.endpoint for c in with_fit] == ["activity.download"]
 
 
 def test_400_halves_window_and_learns_cap(conn, settings: Settings, fake: FakeGarmin, clock: FakeClock) -> None:
@@ -243,3 +246,129 @@ def test_server_error_on_wide_window_is_split(conn, settings: Settings, fake: Fa
     assert conn.execute("SELECT COUNT(*) FROM daily WHERE rhr IS NOT NULL").fetchone()[0] >= 365
     cap = repo.learned_cap(conn, "usersummary.range")
     assert cap is not None and 7 <= cap <= 200
+
+
+# -- FIT downloads (PLAN-FIT §6) -------------------------------------------------------------------------------------
+def new_activity(fake: FakeGarmin, aid: int = 3_000_000, when: str = "2026-10-28 09:00:00",
+                 type_key: str = "running") -> None:
+    fake.activities.insert(0, dict(fake.activities[0], activityId=aid, startTimeLocal=when,
+                                   activityType={"typeKey": type_key}))
+
+
+def test_new_activity_gets_detail_and_fit(conn, settings: Settings, fake: FakeGarmin, clock: FakeClock,
+                                          paths) -> None:  # type: ignore[no-untyped-def]
+    run(conn, settings, fake, clock, {Tier.H})
+    clock.advance(hours=2)
+    nxt = FakeGarmin()
+    new_activity(nxt)
+    res = Runner(conn, settings, nxt, clock=clock, paths=paths).run({Tier.A})
+    assert res.status == "done" and Tier.A in res.tiers_completed
+    assert [n for n, _ in nxt.log] == ["activities.search", "activity.detail", "activity.workouts",
+                                       "activity.download"]
+    assert conn.execute("SELECT has_fit FROM activity WHERE activity_id=3000000").fetchone()[0] == 1
+    assert (paths.fit_dir / "3000000.zip").exists()
+    assert conn.execute("SELECT COUNT(*) FROM raw_payload WHERE endpoint='activity.download'").fetchone()[0] == 0
+    assert repo.get_sync_state(conn, "activity.download", "3000000")["last_status"] == 200
+
+
+@pytest.mark.parametrize("kind", ["404", "parse_error", "5xx"])
+def test_failed_download_never_stales_tier_a(conn, settings: Settings, fake: FakeGarmin, clock: FakeClock,
+                                             kind: str) -> None:
+    run(conn, settings, fake, clock, {Tier.H})
+    clock.advance(hours=2)
+    nxt = FakeGarmin()
+    new_activity(nxt)
+    if kind == "404":
+        nxt.no_fit_ids.add(3_000_000)
+    elif kind == "parse_error":
+        nxt.bad_zip_ids.add(3_000_000)
+    else:
+        nxt.errors["activity.download"] = ServerError("activity.download: HTTP 503 after 5 tries", 503)
+    res = run(conn, settings, nxt, clock, {Tier.A})
+    assert Tier.A in res.tiers_completed
+    assert repo.tier_states(conn)["A"]["last_completed_at"] == clock()
+    st = repo.get_sync_state(conn, "activity.download", "3000000")
+    fit_row = conn.execute("SELECT status FROM activity_fit WHERE activity_id=3000000").fetchone()
+    if kind == "404":
+        assert res.status == "done" and st["last_status"] == 404 and fit_row["status"] == "not_found"
+    elif kind == "parse_error":
+        assert res.status == "done" and st["last_status"] == 200 and fit_row["status"] == "parse_error"
+    else:
+        assert res.status == "partial" and st["last_status"] == 503 and fit_row is None
+    clock.advance(hours=2)
+    again = FakeGarmin()
+    new_activity(again)
+    run(conn, settings, again, clock, {Tier.A})
+    # tried once: never refetched; a 5xx is retried on the next plan
+    assert again.counts()["activity.download"] == (1 if kind == "5xx" else 0)
+
+
+def test_budget_stop_defers_downloads_and_next_refresh_picks_them_up(conn, settings: Settings, fake: FakeGarmin,
+                                                                       clock: FakeClock) -> None:
+    run(conn, settings, fake, clock, {Tier.H})
+    clock.advance(hours=2)
+    nxt = FakeGarmin(budget=6)
+    for i in range(2):
+        new_activity(nxt, 3_000_000 + i, f"2026-10-28 0{8 + i}:00:00")
+    res = run(conn, settings, nxt, clock, {Tier.A})
+    assert res.status == "partial" and Tier.A in res.tiers_completed and Tier.F not in res.tiers_completed
+    # search + 2 x (detail + workouts) complete A first; one download fits in the budget, the other waits
+    names = [n for n, _ in nxt.log]
+    assert names[:5].count("activity.download") == 0 and names[5:] == ["activity.download"]
+    clock.advance(hours=2)
+    later = FakeGarmin()
+    for i in range(2):
+        new_activity(later, 3_000_000 + i, f"2026-10-28 0{8 + i}:00:00")
+    run(conn, settings, later, clock, {Tier.A})
+    assert later.counts()["activity.download"] == 1 and later.counts()["activity.detail"] == 0
+
+
+def test_backfill_details_before_downloads_across_pages(conn, settings: Settings, clock: FakeClock) -> None:
+    settings.sync.detail_days = 400  # every activity of the year gets detail + FIT: several list pages
+    fake = FakeGarmin()
+    run(conn, settings, fake, clock, {Tier.H})
+    names = [n for n, _ in fake.log]
+    first_download = names.index("activity.download")
+    assert "activity.detail" not in names[first_download:] and "activities.search" not in names[first_download:]
+    assert names.count("activity.download") == names.count("activity.detail") > 100
+
+
+def test_fit_disabled_and_skip_types(conn, settings: Settings, fake: FakeGarmin, clock: FakeClock) -> None:
+    settings.fit.download = False
+    run(conn, settings, fake, clock, {Tier.H})
+    assert fake.counts()["activity.download"] == 0 and fake.counts()["activity.detail"] > 0
+    settings.fit.download = True
+    settings.fit.skip_types = ["running"]
+    clock.advance(hours=2)
+    nxt = FakeGarmin()
+    new_activity(nxt, 3_000_000, type_key="running")
+    new_activity(nxt, 3_000_001, "2026-10-28 10:00:00", type_key="road_biking")
+    run(conn, settings, nxt, clock, {Tier.A})
+    assert [a["activity_id"] for n, a in nxt.log if n == "activity.download"] == [3_000_001]
+
+
+def test_tier_f_plans_the_whole_history_newest_first(conn, settings: Settings, fake: FakeGarmin,
+                                                     clock: FakeClock) -> None:
+    settings.fit.download = False
+    run(conn, settings, fake, clock, {Tier.H})
+    settings.fit.download = True
+    calls = Planner(conn, settings, clock()).plan({Tier.F})
+    starts = [conn.execute("SELECT start_local FROM activity WHERE activity_id=?", (c.args["activity_id"],))
+              .fetchone()[0] for c in calls]
+    assert len(calls) == conn.execute("SELECT COUNT(*) FROM activity").fetchone()[0] > 100
+    assert starts == sorted(starts, reverse=True) and all(c.tier == Tier.F for c in calls)
+    assert calls[0].step == f"activity.download {calls[0].key} ({starts[0][:10]})"
+
+
+def test_yield_check_stops_partial_and_keeps_the_call(conn, settings: Settings, fake: FakeGarmin,
+                                                      clock: FakeClock) -> None:
+    settings.fit.download = False
+    run(conn, settings, fake, clock, {Tier.H})
+    settings.fit.download = True
+    n_pending = len(Planner(conn, settings, clock()).plan({Tier.F}))
+    f = FakeGarmin()
+    res = Runner(conn, settings, f, clock=clock, yield_check=lambda: f.calls_made >= 3).run({Tier.F})
+    assert res.status == "partial" and res.error == "yielded: on-demand refresh waiting" and res.calls_done == 3
+    assert len(Planner(conn, settings, clock()).plan({Tier.F})) == n_pending - 3  # the 4th was not lost
+    rest = FakeGarmin()
+    assert run(conn, settings, rest, clock, {Tier.F}).status == "done" and rest.calls_made == n_pending - 3

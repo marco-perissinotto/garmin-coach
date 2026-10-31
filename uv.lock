@@ -433,6 +433,7 @@ source = { editable = "." }
 dependencies = [
     { name = "filelock" },
     { name = "garmin-connect-personal-api-python" },
+    { name = "garmin-fit-sdk" },
     { name = "jinja2" },
     { name = "mcp" },
     { name = "platformdirs" },
@@ -454,6 +455,7 @@ dev = [
 requires-dist = [
     { name = "filelock", specifier = ">=4.2.4" },
     { name = "garmin-connect-personal-api-python", specifier = ">=1.0.0" },
+    { name = "garmin-fit-sdk", specifier = ">=21.218.0" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "mcp", specifier = ">=2.3.0" },
     { name = "platformdirs", specifier = ">=4.13.7" },
@@ -481,6 +483,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f7/7e/5b5cdad5af4304a4562c826606e17ae1278dda80dc7668fdcc11bed671cd/garmin_connect_personal_api_python-1.0.0.tar.gz", hash = "sha256:75a3b64083b2f176ca4d68cfb5bf731fcb1aaa82c63fe9239dbd5ec7215a08aa", size = 42311, upload-time = "2026-10-21T15:02:28.146Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/26/de/42c161fc44d2ae3fd6f22ce152ebcf25d448e786843561844b62c55f5b17/garmin_connect_personal_api_python-1.0.0-py3-none-any.whl", hash = "sha256:a709a7836651f173f7b82a22074cb96def9caf7c17ee41fdfaa6d40657c5711b", size = 35577, upload-time = "2026-10-21T15:02:27.025Z" },
+]
+
+[[package]]
+name = "garmin-fit-sdk"
+version = "21.218.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/b2/c7e1984d828332e7d36d75044f91f2113de246c206931d185e5ed224fc62/garmin_fit_sdk-21.218.0.tar.gz", hash = "sha256:70dc8c39cec3483871f966415ee786a12e121af2a1729b5719f430078d2de495", size = 216076, upload-time = "2026-10-06T17:30:49.952Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d6/82/2d2c84c316186bb0cd055d96068395705e8d4d70eeb0085943b5cffd8895/garmin_fit_sdk-21.218.0-py3-none-any.whl", hash = "sha256:7b912cde3b0b8f4acd7b543c202d15ac94f6b37b58eab5bad2186ca787b9ab37", size = 238238, upload-time = "2026-10-06T17:30:48.026Z" },
 ]
 
 [[package]]

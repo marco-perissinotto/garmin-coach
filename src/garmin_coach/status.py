@@ -6,10 +6,11 @@ import sqlite3
 from datetime import timedelta
 from typing import Any
 
-from .clock import Clock, parse_iso, system_clock
+from .clock import Clock, local_today, parse_iso, system_clock
+from .fit import store as fit_store
 from .garmin.endpoints import REFRESH_TIERS, Tier
 from .secrets import key_file_status
-from .settings import Settings
+from .settings import Paths, Settings, get_paths
 from .store import repo
 from .sync.jobs import active_jobs, list_jobs
 
@@ -18,17 +19,38 @@ _JOB_FIELDS = ("id", "kind", "status", "trigger", "tiers", "calls_done", "calls_
 
 
 def _eta_seconds(job: dict[str, Any], settings: Settings, clock: Clock) -> int | None:
+    gap_ms = settings.fit.call_gap_ms if job.get("kind") == "fit" else settings.sync.min_call_gap_ms
     planned, done = job.get("calls_planned") or 0, job.get("calls_done") or 0
     remaining = max(planned - done - (job.get("calls_failed") or 0), 0)
     started = parse_iso(job.get("started_at"))
     if started and done > 0:
         per_call = (clock() - started).total_seconds() / done
     else:
-        per_call = settings.sync.min_call_gap_ms / 1000 + 0.5
+        per_call = gap_ms / 1000 + 0.5
     return int(remaining * per_call)
 
 
-def build_status(conn: sqlite3.Connection, settings: Settings, clock: Clock = system_clock) -> dict[str, Any]:
+def _fit_block(conn: sqlite3.Connection, settings: Settings, paths: Paths, clock: Clock,
+               states: dict[str, dict[str, Any]], running: list[dict[str, Any]]) -> dict[str, Any]:
+    """FIT coverage, the F cooldown and the running / last fit job (PLAN-FIT §8.3)."""
+    now = clock()
+    out = fit_store.coverage(conn, settings, paths, local_today(now))
+    cd = states.get(Tier.F.value, {}).get("cooldown_until")
+    out["cooldown_until"] = cd.isoformat() if cd and cd > now else None
+    j = next((x for x in running if x["kind"] == "fit" and x["status"] == "running"),
+             next((x for x in running if x["kind"] == "fit"), None))
+    if j is not None:
+        out["job"] = {k: j[k] for k in ("id", "status", "calls_done", "calls_planned", "current_step")}
+        out["job"]["eta_seconds"] = _eta_seconds(j, settings, clock)
+    last = conn.execute("SELECT * FROM job WHERE kind='fit' AND status NOT IN ('queued','running') "
+                        "ORDER BY id DESC LIMIT 1").fetchone()
+    if last is not None:
+        out["last_job"] = {k: last[k] for k in ("id", "status", "calls_done", "error", "finished_at")}
+    return out
+
+
+def build_status(conn: sqlite3.Connection, settings: Settings, clock: Clock = system_clock,
+                 paths: Paths | None = None) -> dict[str, Any]:
     now = clock()
     states = repo.tier_states(conn)
     tiers: dict[str, Any] = {}
@@ -72,4 +94,5 @@ def build_status(conn: sqlite3.Connection, settings: Settings, clock: Clock = sy
         "cooldown_until": max(cooldowns).isoformat() if cooldowns else None,
         "last_error": max(errors, key=lambda e: e[0])[1] if errors else None,
         "key_age_days": key.age_days,
+        "fit": _fit_block(conn, settings, paths or get_paths(), clock, states, running),
     }

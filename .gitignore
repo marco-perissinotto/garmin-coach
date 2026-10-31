@@ -23,6 +23,8 @@ data/
 *.txt
 context/out/
 fit/
+# the FIT parser package, not a FIT archive
+!src/garmin_coach/fit/
 *.fit
 *.zip
 refresh.lock

@@ -44,7 +44,8 @@ Tre idee alla base:
 | 2 | Metriche (carico, forma, prontezza) e "context pack" per il coach | fatta |
 | 3 | Server MCP completo (tool, risorse, prompt), integrazione con Claude Desktop e Claude Code | fatta |
 | 4 | Secondo computer (Mac), avviso di scadenza della chiave, rifiniture | da fare |
-| 5–6 | Opzionali: file FIT, nutrizione, dashboard locale | da fare |
+| 5a | File FIT: giri, ripetute, tempo nelle zone, dinamiche di corsa e pedalata, deriva cardiaca ([docs/FIT.md](docs/FIT.md)) | fatta, verifiche dal vivo in corso |
+| 5–6 | Opzionali: nutrizione, dashboard locale | da fare |
 
 Il piano completo è in [docs/PLAN.md](docs/PLAN.md); le decisioni prese durante l'implementazione, con le
 motivazioni, in [docs/DECISIONS.md](docs/DECISIONS.md).
@@ -115,6 +116,17 @@ Cosa trova Claude nel server:
 La variabile d'ambiente `GARMIN_COACH_HOME` sposta la cartella dati dove preferisci. Nessuno di questi percorsi è
 sincronizzato dal cloud, e niente di tutto questo finisce nel repo.
 
+I file FIT originali delle attività stanno in `<dati>/fit/` (uno zip per attività, da pochi kB a circa 1 MB): per un
+archivio di circa 1 300 attività contate 0,3–1 GB. Servono a ricalcolare le analisi senza riscaricare nulla se il
+programma migliora; `status` e `doctor` mostrano quanto spazio occupano. Se preferite non tenerli, in `settings.yaml`:
+
+```yaml
+fit:
+  keep_files: false        # tiene solo i riepiloghi nel database
+  skip_types: [walking]    # tipi di attività di cui non scaricare il FIT
+  # download: false        # nessun file FIT
+```
+
 ## I tuoi file personali
 
 Vanno nella cartella `<dati>/config/`. I modelli sono in [config/](config/):
@@ -126,7 +138,7 @@ Vanno nella cartella `<dati>/config/`. I modelli sono in [config/](config/):
 | `history.md` | La storia atletica che Garmin non può sapere: infortuni, cosa ha funzionato, gare passate |
 | `coach-notes.md` | Le regole di coaching concordate, una riga per regola con la data |
 | `coaching-state.yaml` | Opzionale, lo scrive il coach: lo stato attuale (sintomi riferiti, piano dei prossimi giorni con le condizioni che lo cambiano, decisioni aperte e prese). Si sovrascrive, non è un diario; si può correggere a mano |
-| `settings.yaml` | Opzionale: scadenze della cache, ritmo delle chiamate, giorni di storico da caricare |
+| `settings.yaml` | Opzionale: scadenze della cache, ritmo delle chiamate, giorni di storico da caricare, file FIT (blocco `fit:`, vedi [config/settings.example.yaml](config/settings.example.yaml)) |
 
 Questa cartella è l'unica cosa da copiare tra un computer e l'altro: ogni computer tiene la propria cache e la
 aggiorna per conto suo.
@@ -136,10 +148,13 @@ aggiorna per conto suo.
 | Comando | Cosa fa |
 |---|---|
 | `garmin-coach doctor [--offline]` | Verifica chiave, connessione a Garmin, database e file personali |
-| `garmin-coach backfill [--days N] [--background]` | Carica lo storico. Riprende da dove si era fermato, non scarica due volte la stessa cosa |
+| `garmin-coach backfill [--days N] [--fit] [--background]` | Carica lo storico. Riprende da dove si era fermato, non scarica due volte la stessa cosa. Con `--fit`, finito lo storico, scarica anche i file FIT del passato |
+| `garmin-coach fit backfill [--days N] [--background]` | Scarica e analizza i file FIT delle attività passate, dalle più recenti, a blocchi di 100 chiamate che si mettono in pausa quando Claude ha bisogno di Garmin. Si può interrompere e riprendere |
+| `garmin-coach fit reparse [--all] [ID ...]` | Ricalcola le analisi FIT dagli zip salvati, senza contattare Garmin (dopo un aggiornamento del programma) |
+| `garmin-coach fit show ID [--json]` | Mostra l'analisi FIT di un'attività |
 | `garmin-coach sync [--tier A,B] [--force] [--background]` | Aggiorna la cache. Senza `--force` rispetta le scadenze: se tutto è fresco non fa chiamate |
 | `garmin-coach normalize --all` | Ricostruisce le tabelle dai dati grezzi salvati, senza contattare Garmin |
-| `garmin-coach status [--watch] [--json]` | Età della cache per livello, storico caricato?, lavoro in corso con avanzamento e stima di fine |
+| `garmin-coach status [--watch] [--json]` | Età della cache per livello, storico caricato?, lavoro in corso con avanzamento e stima di fine, quante attività hanno il FIT |
 | `garmin-coach jobs list \| show <id> \| cancel <id> \| prune` | Storico e controllo dei lavori di sincronizzazione |
 | `garmin-coach context show [daily\|weekly\|events\|athlete\|recent\|instructions] [--offline]` | Stampa un pack pronto da incollare in una chat; senza `--offline` aggiorna prima i dati che servono |
 | `garmin-coach context build [--offline]` | Ricalcola le metriche e riscrive tutti i pack in `<dati>/context/` |
@@ -147,7 +162,7 @@ aggiorna per conto suo.
 | `garmin-coach mcp [--http --port 8765]` | Avvia il server MCP per Claude. Se la cache è vuota, fa partire da solo il caricamento dello storico. `--http` lo espone solo su `127.0.0.1` con un token casuale stampato all'avvio |
 | `garmin-coach install claude-desktop \| claude-code [--dry-run]` | Registra il server in Claude Desktop o in Claude Code |
 
-Codici di uscita di `backfill` e `sync`: 0 completato, 2 parziale (riprende al prossimo avvio), 1 fallito.
+Codici di uscita di `backfill`, `fit backfill` e `sync`: 0 completato, 2 parziale (riprende al prossimo avvio), 1 fallito.
 
 ## Cosa legge il coach
 
@@ -166,6 +181,13 @@ Markdown (più `context.json` con gli stessi dati strutturati):
 Le formule e i loro limiti sono in [docs/METRICS.md](docs/METRICS.md). Il VO2max non è disponibile con la Personal
 API: al suo posto ci sono indicatori di efficienza (metri per battito in corsa, watt per battito in bici).
 
+Per la singola seduta il coach legge anche il file FIT originale (tool `get_activity`, sezione `fit`): tempo nelle
+zone di frequenza cardiaca e di potenza, i giri e le ripetute con il calo dalla prima all'ultima, le dinamiche di
+corsa (cadenza, contatto col suolo, oscillazione) e di pedalata (bilanciamento sinistra/destra), la deriva cardiaca
+(disaccoppiamento potenza o passo / frequenza cardiaca) e, su richiesta, l'andamento della seduta. Il FIT delle
+attività nuove si scarica da solo; per quelle passate c'è `fit backfill` (oppure chiedere a Claude `/coach fit`). Lo
+schema completo è in [docs/FIT.md](docs/FIT.md). I pack Markdown non usano ancora i dati FIT.
+
 ## Come si aggiorna la cache
 
 I dati sono divisi in livelli, ognuno con la propria scadenza. Una richiesta aggiorna solo i livelli di cui ha
@@ -179,6 +201,7 @@ bisogno:
 | D | Dati giornalieri opzionali (SpO2, nutrizione) | 24 h | in background |
 | E | Profilo, zone cardiache, fitness age, obiettivo peso | 7 giorni | in background |
 | H | Storico completo | una volta | automatico al primo avvio |
+| F | File FIT delle attività | una volta per attività | dopo il livello A per le attività nuove; il passato con `fit backfill` |
 
 Protezioni verso Garmin: pausa minima tra le chiamate, nuovi tentativi con attesa crescente su errori temporanei,
 e un interruttore che sospende le chiamate per un po' se Garmin segnala troppe richieste. In quel caso Claude riceve

@@ -98,7 +98,19 @@ class SyncSettings(_Model):
     lock_wait_seconds: float = 15
     heartbeat_stale_seconds: int = 120
     cooldown_minutes: CooldownMinutes = Field(default_factory=CooldownMinutes)
-    download_fit: bool = False
+
+
+class FitSettings(_Model):
+    """FIT download and parsing (docs/PLAN-FIT.md §3). Replaces the old ``sync.download_fit`` (D-076)."""
+
+    download: bool = True  # download + parse the FIT of every new activity during sync (tier A, history)
+    keep_files: bool = True  # keep <app data>/fit/<activityId>.zip for offline re-parsing
+    skip_types: list[str] = Field(default_factory=list)  # Garmin typeKeys never downloaded, e.g. [walking, hiking]
+    backfill_days: int = 0  # `fit backfill` window in days; 0 = the whole activity history in the cache
+    backfill_budget_calls: int = 100  # per fit job; jobs chain until every eligible activity has been tried
+    call_gap_ms: int = 1500  # pacing of fit jobs (ZIP responses are heavier than JSON)
+    max_laps: int = 300  # laps kept per activity (meta.laps_truncated when cut)
+    series_points: int = 48  # points of the coarse intensity profile
 
 
 class OptionalEndpoints(_Model):
@@ -117,6 +129,7 @@ class ContextSettings(_Model):
 
 class Settings(_Model):
     sync: SyncSettings = Field(default_factory=SyncSettings)
+    fit: FitSettings = Field(default_factory=FitSettings)
     optional_endpoints: OptionalEndpoints = Field(default_factory=OptionalEndpoints)
     context: ContextSettings = Field(default_factory=ContextSettings)
 

@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # MIGRATIONS[n - 1] upgrades from version n to n + 1 (v0 -> v1 is the base schema).
 # The flag says whether the normalized layer must be rebuilt from raw_payload afterwards (offline, no network).
@@ -31,6 +31,18 @@ MIGRATIONS: list[tuple[str, bool]] = [
     ),
     (  # v2 -> v3 (Phase 2): fingerprint of the data the derived layer was computed from
         "CREATE TABLE IF NOT EXISTS derived_state (key TEXT PRIMARY KEY, value TEXT);",
+        False,
+    ),
+    (  # v3 -> v4 (Phase 5a, docs/PLAN-FIT.md §4.1): FIT summaries + process-wide flags; existing rows untouched
+        """
+        CREATE TABLE IF NOT EXISTS activity_fit (
+          activity_id INTEGER PRIMARY KEY, status TEXT NOT NULL, fetched_at TEXT NOT NULL, parsed_at TEXT,
+          parser_version INTEGER, file_name TEXT, zip_sha256 TEXT, zip_bytes INTEGER, fit_bytes INTEGER,
+          sport TEXT, sub_sport TEXT, device TEXT, n_sessions INTEGER, n_laps INTEGER, n_records INTEGER,
+          data TEXT, error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS app_flag (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        """,
         False,
     ),
 ]

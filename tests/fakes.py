@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import copy
 import json
+import random
 import threading
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+import fitgen
 
 from garmin_coach.garmin.chunking import parse_range_key
 from garmin_coach.garmin.client import BudgetExhaustedError, NotFoundError
@@ -53,6 +56,9 @@ class FakeGarmin:
         self.log: list[tuple[str, dict[str, Any]]] = []
         self.errors: dict[str, Any] = {}
         self.no_data_days: set[str] = set()
+        self.no_fit_ids: set[int] = set()  # activity.download -> 404 (manual entries, no original file)
+        self.bad_zip_ids: set[int] = set()  # activity.download -> random bytes
+        self.gpx_ids: set[int] = set()  # activity.download -> a ZIP holding a .gpx
         self.version = 0  # bump to make every response differ (simulates Garmin revising data)
         self.lock = threading.Lock()
         tmpl = fixture("activity_summary")
@@ -106,6 +112,16 @@ class FakeGarmin:
 
     def _activity_workouts(self, a: dict[str, Any]) -> Any:
         return []
+
+    def _activity_download(self, a: dict[str, Any]) -> bytes:
+        aid = int(a["activity_id"])
+        if aid in self.no_fit_ids:
+            raise NotFoundError("activity.download: HTTP 404", 404)
+        if aid in self.bad_zip_ids:
+            return random.Random(aid).randbytes(2000)
+        if aid in self.gpx_ids:
+            return fitgen.zip_bytes(f"{aid}.gpx", fitgen.GPX)
+        return fitgen.activity_zip(aid)
 
     def _day_or_404(self, d: str) -> None:
         if d in self.no_data_days:

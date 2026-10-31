@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from ..clock import local_today, parse_iso
+from ..fit import store as fit_store
 from ..garmin import endpoints as ep
 from ..garmin.chunking import range_key, split_aligned, split_range
 from ..garmin.endpoints import Tier
@@ -22,6 +23,7 @@ from .normalize.activities import summary_hash
 
 TOMBSTONE_TTL = timedelta(hours=24)
 OK_STATUSES = (200, 204, 404)
+FETCHED_ONCE = ("activity.detail", "activity.workouts", "activity.download")
 RECENT_PAGE_LIMIT = 20
 RECENT_MAX_PAGES = 3
 BACKFILL_PAGE_LIMIT = 100
@@ -94,9 +96,13 @@ class Planner:
     def is_fresh(self, call: Call) -> bool:
         """True when this slice was fetched recently enough to skip (PLAN §6.2, §6.3 tombstones)."""
         st = repo.get_sync_state(self.conn, call.endpoint, call.key)
-        if st is None or st["last_status"] not in OK_STATUSES:
+        if st is None:
             return False
-        if call.endpoint in ("activity.detail", "activity.workouts"):
+        if call.endpoint == "activity.download" and fit_store.attempted(self.conn, int(call.key)):
+            return True  # tried once (a 400 too, PLAN-FIT §6.4); 429/5xx are retried
+        if st["last_status"] not in OK_STATUSES:
+            return False
+        if call.endpoint in FETCHED_ONCE:
             return True  # immutable enough: fetched once, refreshed only on explicit request
         if self.force and call.tier != Tier.H:
             return False
@@ -150,7 +156,7 @@ class Planner:
     def plan(self, tiers: set[Tier] | frozenset[Tier]) -> list[Call]:
         out: list[Call] = []
         t, y = self.today, self.today - timedelta(days=1)
-        for tier in sorted(tiers, key=lambda x: "ABHCDE".index(x.value)):
+        for tier in sorted(tiers, key=lambda x: "ABHCDEF".index(x.value)):
             if tier == Tier.A:
                 self._add(out, self._search(0, RECENT_PAGE_LIMIT, Tier.A))
             elif tier == Tier.B:
@@ -175,7 +181,22 @@ class Planner:
                     if ep.get(name).kind == "range" and name != "weightgoal.range":
                         self._range(out, name, start, t, Tier.H, aligned=True)
                 self._e_calls(out, Tier.H)
+            elif tier == Tier.F:
+                # The whole eligible history, newest first: the job's call budget bounds it and the chain continues
+                # (PLAN-FIT D-073).
+                for aid in fit_store.pending_ids(self.conn, self.settings, t):
+                    self._add(out, self._download(aid, Tier.F))
         return out
+
+    def _download(self, activity_id: int, tier: Tier, start_local: str = "") -> Call:
+        if not start_local:
+            row = self.conn.execute("SELECT start_local FROM activity WHERE activity_id=?", (activity_id,)).fetchone()
+            start_local = str((row["start_local"] if row else None) or "")[:10]
+        return Call("activity.download", str(activity_id), {"activity_id": activity_id}, tier,
+                    f"activity.download {activity_id} ({start_local})")
+
+    def wants_fit(self, type_key: str | None) -> bool:
+        return self.settings.fit.download and not fit_store.skipped_type(self.settings, type_key)
 
     def _e_calls(self, out: list[Call], tier: Tier) -> None:
         t = self.today
@@ -186,7 +207,8 @@ class Planner:
 
     # -- dynamic expansion --------------------------------------------------------------------------------------
     def expand(self, call: Call, body: Any) -> list[Call]:
-        """Follow-up calls after an activity search page: next page + detail/workouts for recent new activities."""
+        """Follow-up calls after an activity search page: next page + detail/workouts (and the FIT download, tier F)
+        for recent new activities."""
         if call.endpoint != "activities.search" or not isinstance(body, list):
             return []
         out: list[Call] = []
@@ -207,6 +229,9 @@ class Planner:
             if start_local >= detail_cutoff and not (known and known["has_detail"]):
                 for name in ("activity.detail", "activity.workouts"):
                     out.append(Call(name, str(aid), {"activity_id": aid}, call.tier, f"{name} {aid} ({start_local})"))
+            if start_local >= detail_cutoff and self.wants_fit(dig_type_key(a)):
+                # Tier F: a failed download never leaves tier A or H incomplete (PLAN-FIT D-071).
+                out.append(self._download(aid, Tier.F, start_local))
         full_page = len(body) >= limit
         if call.tier == Tier.H:
             more = full_page  # backfill pages through the whole window
@@ -231,8 +256,16 @@ class Planner:
             self._add(out, c)
         return out
 
-    def lazy_detail_calls(self, activity_id: int) -> list[Call]:
-        return self.resolve([
-            Call(n, str(activity_id), {"activity_id": activity_id}, Tier.A, f"{n} {activity_id}")
-            for n in ("activity.detail", "activity.workouts")
-        ])
+    def lazy_activity_calls(self, activity_id: int, *, want_fit: bool) -> list[Call]:
+        """``get_activity`` on one activity: detail + workouts when missing, plus the FIT download when ``want_fit``
+        (the caller checks ``fit.download`` and the type) and not tried yet. Fresh calls are filtered out."""
+        calls = [Call(n, str(activity_id), {"activity_id": activity_id}, Tier.A, f"{n} {activity_id}")
+                 for n in ("activity.detail", "activity.workouts")]
+        if want_fit:
+            calls.append(self._download(activity_id, Tier.F))
+        return self.resolve(calls)
+
+
+def dig_type_key(a: dict[str, Any]) -> str | None:
+    t = a.get("activityType")
+    return t.get("typeKey") if isinstance(t, dict) else None

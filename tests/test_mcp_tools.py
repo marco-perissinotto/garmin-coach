@@ -20,6 +20,7 @@ from test_context import STATE, write_inputs, write_state
 
 from garmin_coach import state as state_m
 from garmin_coach.app import App
+from garmin_coach.fit.parse import PARSER_VERSION
 from garmin_coach.garmin.client import NetworkError, ServerError
 from garmin_coach.garmin.endpoints import REFRESH_TIERS, Tier
 from garmin_coach.mcp import prompts as prompts_mod
@@ -232,7 +233,7 @@ def test_get_activity_fit_sections_laps_and_series(warmed, monkeypatch: pytest.M
     assert f.calls == 0 and r["fit_status"] == "ok"
     fit = r["fit"]
     assert set(fit) == {"meta", "session", "zones", "intervals", "dynamics", "records", "route", "device"}
-    assert fit["meta"] == {"parser_version": 1, "n_laps": 11, "n_records": 110, "laps_truncated": False,
+    assert fit["meta"] == {"parser_version": PARSER_VERSION, "n_laps": 11, "n_records": 110, "laps_truncated": False,
                            "truncated": False}
     assert fit["intervals"]["work"]["n"] == 6 and fit["zones"]["source"] == "time_in_zone"
     assert "laps" not in fit and "series" not in fit

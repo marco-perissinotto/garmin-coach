@@ -21,7 +21,7 @@ from typing import Any, Literal
 
 from ..secrets import redact
 
-PARSER_VERSION = 1
+PARSER_VERSION = 2  # 2: per-leg zones, dynamics, records, intervals and lap ranges for multisport files (D-084)
 
 MAX_MEMBER_BYTES = 50 * 1024 * 1024  # zip-bomb guard: a real activity FIT is well below 10 MB
 MAX_JSON_CHARS = 120_000  # hard cap of one summary (D-075): drop series, then cut laps
@@ -383,10 +383,12 @@ def _dynamics(s: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _zones(messages: dict[str, Any], s: dict[str, Any], computed: list[int] | None,
-           floors: list[int] | None) -> dict[str, Any] | None:
+           floors: list[int] | None, index: int = 0) -> dict[str, Any] | None:
+    """``index`` is the session's position: a multisport file writes one time_in_zone message per leg."""
+    accepted = (index, None) if index == 0 else (index,)
     tiz = next((m for m in messages.get("time_in_zone_mesgs") or []
                 if isinstance(m, dict) and m.get("reference_mesg") == "session"
-                and m.get("reference_index") in (0, None)), None)
+                and m.get("reference_index") in accepted), None)
     if tiz is not None:
         hr = {"time_s": _ints(tiz.get("time_in_hr_zone")), "boundaries_bpm": _ints(tiz.get("hr_zone_high_boundary")),
               "calc_type": _enum(tiz.get("hr_calc_type")), "max_hr": _r(tiz.get("max_heart_rate"), 0),
@@ -440,8 +442,12 @@ class _Records:
     """One pass over the record messages: aggregates, decoupling, the coarse series, computed zones, route ends.
     The records themselves are not kept."""
 
-    def __init__(self, messages: dict[str, Any], s: dict[str, Any], start: datetime | None) -> None:
+    def __init__(self, messages: dict[str, Any], s: dict[str, Any], start: datetime | None,
+                 window: tuple[datetime, datetime] | None = None) -> None:
+        """``window`` keeps only the records of one multisport leg: start inclusive, end exclusive."""
         raw = [r for r in messages.get("record_mesgs") or [] if isinstance(r, dict)]
+        if window is not None:
+            raw = [r for r in raw if isinstance(r.get("timestamp"), datetime) and window[0] <= r["timestamp"] < window[1]]
         self.n = len(raw)
         self.recs = sorted((r for r in raw if isinstance(r.get("timestamp"), datetime)), key=lambda r: r["timestamp"])
         self.family = _family(s)
@@ -609,17 +615,71 @@ def _route(s: dict[str, Any], recs: _Records) -> dict[str, Any] | None:
     return {"start": start, "end": end} if start or end else None
 
 
+def _leg_windows(sessions: list[dict[str, Any]]) -> list[tuple[datetime, datetime] | None]:
+    """Each session's span: from its start to the next session's start (the last one: start + elapsed, plus 1 s for
+    the closing record). ``None`` when the session has no start time."""
+    out: list[tuple[datetime, datetime] | None] = []
+    for k, s in enumerate(sessions):
+        start = s.get("start_time")
+        if not isinstance(start, datetime):
+            out.append(None)
+            continue
+        nxt = sessions[k + 1].get("start_time") if k + 1 < len(sessions) else None
+        elapsed = _num(s.get("total_elapsed_time"))
+        if isinstance(nxt, datetime):
+            end = nxt
+        elif elapsed is not None:
+            end = start + timedelta(seconds=elapsed + 1)
+        else:
+            end = datetime.max.replace(tzinfo=start.tzinfo)
+        out.append((start, end))
+    return out
+
+
+def _lap_legs(raw_laps: list[dict[str, Any]], windows: list[tuple[datetime, datetime] | None]) -> list[int]:
+    """The session (0-based) each lap belongs to: the last leg starting at or before the lap's start; a lap without
+    a start time stays with the previous lap's leg."""
+    legs: list[int] = []
+    for lap in raw_laps:
+        ts = lap.get("start_time")
+        leg = legs[-1] if legs else 0
+        if isinstance(ts, datetime):
+            leg = max((k for k, w in enumerate(windows) if w is not None and w[0] <= ts), default=leg)
+        legs.append(leg)
+    return legs
+
+
+def _leg(messages: dict[str, Any], s: dict[str, Any], k: int, window: tuple[datetime, datetime] | None,
+         laps: list[dict[str, Any]], lap_legs: list[int]) -> dict[str, Any]:
+    """One item of ``sessions``: the session fields plus what the summary computes for the whole file, restricted to
+    this leg (laps, zones, dynamics, records, intervals)."""
+    leg_laps = [lap for lap, leg in zip(laps, lap_legs, strict=True) if leg == k]
+    out: dict[str, Any] = _session(s)
+    out["lap_range"] = [leg_laps[0]["i"], leg_laps[-1]["i"]] if leg_laps else None
+    out["zones"] = _zones(messages, s, None, None, index=k)
+    out["dynamics"] = _dynamics(s)
+    if window is not None:
+        out["records"] = _Records(messages, s, window[0], window).block(_num(s.get("total_timer_time")))
+    out["intervals"] = _intervals(leg_laps)
+    return out
+
+
 def _summarize(messages: dict[str, Any], errors: list[Exception], sessions: list[dict[str, Any]],
                profile_version: str | None, floors: list[int] | None, max_laps: int,
                series_points: int) -> dict[str, Any]:
     from garmin_fit_sdk import __version__ as sdk_version
 
     s = sessions[0]
-    run = _family(s) == "run"
     file_id: dict[str, Any] = next(iter(messages.get("file_id_mesgs") or []), {}) or {}
     raw_laps = [x for x in messages.get("lap_mesgs") or [] if isinstance(x, dict)]
     raw_laps = [x for x in raw_laps if x.get("total_timer_time") is not None or x.get("total_distance") is not None]
-    laps = [_lap(x, i, run) for i, x in enumerate(raw_laps, 1)]
+    windows = _leg_windows(sessions)
+    lap_legs = _lap_legs(raw_laps, windows)
+    laps = [_lap(x, i, _family(sessions[leg]) == "run") for i, (x, leg) in enumerate(zip(raw_laps, lap_legs,
+                                                                                         strict=True), 1)]
+    if len(sessions) > 1:
+        for lap, leg in zip(laps, lap_legs, strict=True):
+            lap["leg"] = leg + 1
     start = s.get("start_time") if isinstance(s.get("start_time"), datetime) else None
     timer_s = _num(s.get("total_timer_time"))
     recs = _Records(messages, s, start)
@@ -632,10 +692,11 @@ def _summarize(messages: dict[str, Any], errors: list[Exception], sessions: list
             "errors": [redact(f"{type(e).__name__}: {e}")[:200] for e in errors[:MAX_ERRORS]],
         },
         "session": _session(s),
-        "sessions": [_session(x) for x in sessions] if len(sessions) > 1 else None,
+        "sessions": [_leg(messages, x, k, windows[k], laps, lap_legs) for k, x in enumerate(sessions)]
+        if len(sessions) > 1 else None,
         "zones": _zones(messages, s, recs.computed_zones(floors), floors),
         "laps": laps[:max_laps],
-        "intervals": _intervals(laps),
+        "intervals": _intervals(laps) if len(sessions) == 1 else None,  # per leg in `sessions` for multisport
         "dynamics": _dynamics(s),
         "records": recs.block(timer_s),
         "series": recs.series(timer_s, series_points),

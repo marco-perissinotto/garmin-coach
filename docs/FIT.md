@@ -38,14 +38,14 @@ offset applied.
 
 ```jsonc
 {
-  "meta": {"parser_version": 1, "sdk_version": "21.218.0", "profile_version": "21.218", "file_type": "activity",
+  "meta": {"parser_version": 2, "sdk_version": "21.218.0", "profile_version": "21.218", "file_type": "activity",
            "time_created": "2026-10-30T06:01:12Z", "n_sessions": 1, "n_laps": 8, "n_records": 3612,
            "laps_truncated": false, "truncated": false, "errors": []},
   "session": {...},              // the single session, or the first leg
-  "sessions": [{...}],           // only when n_sessions > 1 (multisport): one object per leg, same keys as session
+  "sessions": [{...}],           // only when n_sessions > 1 (multisport): one object per leg, see Multisport
   "zones": {...},
   "laps": [{...}],
-  "intervals": {...},            // only with >= 2 work laps and >= 1 rest lap
+  "intervals": {...},            // single-session files with >= 2 work laps and >= 1 rest lap
   "dynamics": {"run" | "bike" | "swim": {...}},
   "records": {...},
   "series": [{...}],
@@ -119,7 +119,8 @@ than zones (time below zone 1 first); whether index 1-5 equal the activity list'
 `max_power`, `normalized_power`, `avg_cadence`, `avg_cadence_spm` (running), `ascent_m`, `descent_m`, `intensity`
 (`active`, `rest`, `warmup`, `cooldown`, `recovery`, `interval`, `other`), `trigger` (`lap_trigger`), `wkt_step_index`,
 `balance_right_pct`, `step_length_m` (`avg_step_length` mm ÷ 1000), `vertical_oscillation_mm`, `stance_time_ms`,
-`stance_time_balance_pct`, `vertical_ratio_pct`, `avg_gap_mps`, `num_lengths`, `stroke`, `avg_swolf`.
+`stance_time_balance_pct`, `vertical_ratio_pct`, `avg_gap_mps`, `num_lengths`, `stroke`, `avg_swolf`, and `leg`
+(multisport only, see Multisport).
 
 **Pedal balance.** `left_right_balance` on laps and sessions is the `left_right_balance_100` type: bit 15 set = the
 value refers to the right leg, low 14 bits = percent × 100. `garmin-fit-sdk` 21.218.0 does not expand it, so
@@ -129,7 +130,8 @@ omitted. A float already between 0 and 100 (a future SDK expanding the type) is 
 ### `intervals`
 
 Work laps = `intensity == "active"`, rest laps = `rest` or `recovery`; present only with ≥ 2 work and ≥ 1 rest lap
-(computed over every lap, also when `laps` was cut).
+(computed over every lap, also when `laps` was cut). Multisport files have no top-level `intervals`: each leg in
+`sessions` carries its own.
 
 ```jsonc
 "intervals": {"work": {"n": 6, "avg_duration_s": 240.1, "avg_distance_m": 1001.3, "avg_hr": 169, "max_hr": 178,
@@ -173,6 +175,24 @@ The session's shape for "how did it unfold" questions: buckets of `bucket_s = ma
 over `t_s = timestamp − session start` (bucket start, whole seconds); empty buckets (pauses) are skipped; at most
 `fit.series_points` (48) buckets, widened when long pauses with records would exceed it. Each item: `t_s`, `hr`,
 `power`, `speed_mps`, `cadence` (bucket means) and `alt_m`, `dist_m` (last value in the bucket).
+
+### Multisport
+
+A multisport file (triathlon, duathlon) holds one `session` message per leg, transitions included. The top-level
+`session`, `zones`, `dynamics`, `records` and `series` keep describing the first leg (or, for `records` and `series`,
+the whole file with the first leg's sport); everything per leg is in `sessions` (D-084). Each item of `sessions` has
+the `session` keys plus:
+
+| Key | Meaning |
+|---|---|
+| `lap_range` | `[first, last]` lap `i` of the leg |
+| `zones` | the `time_in_zone` message with `reference_mesg = session` and `reference_index` = the leg's position (no computed fallback) |
+| `dynamics` | as above, from the leg's own sport (`bike` for the ride, `run` for the run) |
+| `records` | the `records` block over the leg's records only: from its start to the next leg's start (the last leg: start + elapsed + 1 s) |
+| `intervals` | as above, over the leg's laps |
+
+Laps are assigned to a leg by start time (the last leg starting at or before the lap; a lap without a start time stays
+with the previous lap's leg) and get `leg` (1-based position in `sessions`); `avg_cadence_spm` follows the leg's sport.
 
 ### `route` and `device`
 

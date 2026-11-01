@@ -171,6 +171,28 @@ def test_running_dynamics() -> None:
     assert s["laps"][0]["avg_cadence_spm"] == 180  # lap cadence 90 strides/min
 
 
+def test_multisport_legs() -> None:
+    res = parse.parse_archive(fitgen.activity_zip(1, fitgen.multisport_fit()))
+    assert res.status == "ok" and res.n_sessions == 2 and res.sport == "cycling"
+    s = res.summary
+    assert s is not None
+    assert s["session"]["sport"] == "cycling"  # the top-level session stays the first leg
+    assert "intervals" not in s  # never across legs
+    assert [(x["i"], x["leg"]) for x in s["laps"]] == [(1, 1), (2, 1), (3, 2), (4, 2)]
+    assert [x.get("avg_cadence_spm") for x in s["laps"]] == [None, None, 176, 176]  # run laps get spm by their leg
+    bike, run = s["sessions"]
+    assert (bike["sport"], bike["lap_range"], run["sport"], run["lap_range"]) == ("cycling", [1, 2], "running", [3, 4])
+    assert bike["dynamics"] == {"bike": {"balance_right_pct": 54.6}}
+    assert run["dynamics"]["run"]["cadence_spm"] == 176 and run["dynamics"]["run"]["stance_time_ms"] == 214
+    assert bike["zones"]["hr"]["time_s"] == [0, 0, 0, 1900, 0, 0]
+    assert run["zones"]["hr"]["time_s"] == [0, 0, 0, 1899, 1, 0]
+    assert bike["records"]["n"] == 1900 and run["records"]["n"] == 1900
+    assert bike["records"]["power_source"] == "record.power" and bike["records"]["power_zero_pct"] == 0.0
+    assert bike["records"]["decoupling_pct"] == 0.0 and run["records"]["decoupling_pct"] == 0.0
+    assert "power_zero_pct" not in run["records"]
+    assert not nulls(s)
+
+
 def test_archive_errors() -> None:
     gpx = parse.parse_archive(fitgen.zip_bytes("123.gpx", fitgen.GPX))
     assert gpx.status == "no_fit" and gpx.summary is None

@@ -158,6 +158,58 @@ def build_fit(spec: Spec | None = None) -> bytes:
     return enc.close()
 
 
+@functools.cache
+def multisport_fit() -> bytes:
+    """A two-leg multisport file: a 2-lap ride (200 W, HR 140, right balance 54.6 %), then a 2-lap run (3.5 m/s,
+    HR 150, 176 spm), 950 s per lap at 1 Hz, one session and one time_in_zone message per leg (reference_index 0, 1).
+    The run's second lap has no start time: it must stay with the run."""
+    enc = Encoder()
+    lap_s, n_laps = 950, 2
+    enc.write_mesg({"mesg_num": MN["FILE_ID"], "type": "activity", "manufacturer": "garmin", "product": 3906,
+                    "time_created": T0, "serial_number": SERIAL})
+    enc.write_mesg({"mesg_num": MN["DEVICE_INFO"], "timestamp": T0, "device_index": "creator",
+                    "manufacturer": "garmin", "product": 3906, "software_version": 16.22, "serial_number": SERIAL})
+    legs = [("cycling", "road", 140, 8.0, 200, 85), ("running", "generic", 150, 3.5, 300, 88)]
+    dist = 0.0
+    for k, (sport, sub_sport, hr, speed, power, cadence) in enumerate(legs):
+        leg0 = T0 + timedelta(seconds=k * n_laps * lap_s)
+        enc.write_mesg({"mesg_num": MN["EVENT"], "timestamp": leg0, "event": "timer", "event_type": "start"})
+        for lap in range(n_laps):
+            lap0 = leg0 + timedelta(seconds=lap * lap_s)
+            for t in range(lap_s):
+                dist += speed
+                enc.write_mesg({"mesg_num": MN["RECORD"], "timestamp": lap0 + timedelta(seconds=t), "heart_rate": hr,
+                                "enhanced_speed": speed, "distance": dist, "power": power, "cadence": cadence})
+            lap_msg: dict[str, Any] = {
+                "mesg_num": MN["LAP"], "timestamp": lap0 + timedelta(seconds=lap_s - 1),
+                "start_time": lap0, "total_elapsed_time": float(lap_s), "total_timer_time": float(lap_s),
+                "total_distance": speed * lap_s, "enhanced_avg_speed": speed, "avg_heart_rate": hr,
+                "avg_power": power, "avg_cadence": cadence, "sport": sport, "intensity": "active"}
+            if k == 1 and lap == 1:
+                del lap_msg["start_time"]
+            enc.write_mesg(lap_msg)
+        leg_end = leg0 + timedelta(seconds=n_laps * lap_s)
+        enc.write_mesg({"mesg_num": MN["EVENT"], "timestamp": leg_end, "event": "timer", "event_type": "stop_all"})
+        enc.write_mesg({"mesg_num": MN["TIME_IN_ZONE"], "timestamp": leg_end, "reference_mesg": "session",
+                        "reference_index": k, "time_in_hr_zone": [0.0, 0.0, 0.0, 1900.0 - k, float(k), 0.0],
+                        "hr_zone_high_boundary": TIZ_HR_BOUNDS})
+        session: dict[str, Any] = {
+            "mesg_num": MN["SESSION"], "message_index": k, "timestamp": leg_end, "start_time": leg0, "sport": sport,
+            "sub_sport": sub_sport, "total_elapsed_time": float(n_laps * lap_s),
+            "total_timer_time": float(n_laps * lap_s), "total_distance": speed * n_laps * lap_s,
+            "avg_heart_rate": hr, "avg_power": power, "avg_cadence": cadence, "num_laps": n_laps,
+            "first_lap_index": k * n_laps}
+        if sport == "cycling":
+            session["left_right_balance"] = 0x8000 | 5460
+        else:
+            session.update(avg_stance_time=214.0, avg_vertical_ratio=6.8)
+        enc.write_mesg(session)
+    enc.write_mesg({"mesg_num": MN["ACTIVITY"], "timestamp": T0 + timedelta(seconds=len(legs) * n_laps * lap_s),
+                    "total_timer_time": float(len(legs) * n_laps * lap_s), "num_sessions": len(legs),
+                    "type": "manual", "event": "activity", "event_type": "stop"})
+    return enc.close()
+
+
 def zip_bytes(member: str, data: bytes) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:

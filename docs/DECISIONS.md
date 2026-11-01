@@ -336,3 +336,13 @@ random bytes, `gpx_ids` → a ZIP with a `.gpx`).
 for multisport children / manual entries / GPX uploads; whether session TSS, TE and training load peak are present;
 the meaning of `time_in_hr_zone[0]`; the shape of `left_right_balance`; decode time per file; 429 behaviour of a
 100-call fit job at 1.5 s; disk use after the full backfill.
+
+**D-084 Multisport legs (parser version 2).** The full backfill of 2026-11-01 showed that multisport files (IRONMAN
+70.3 Jesolo 2024 and 2025, sprint triathlons) arrive as one activity with one `session` per leg (swim, transition,
+bike, transition, run), but version 1 summarised zones, dynamics, records and intervals from the first leg only, the
+swim: no bike power analysis, no run dynamics, no decoupling, run laps without steps per minute, and intervals across
+legs. Version 2 adds per-leg `lap_range`, `zones`, `dynamics`, `records` and `intervals` to each item of `sessions`,
+tags laps with `leg` and computes their cadence by the leg's sport, and drops the top-level `intervals` for multisport.
+The top-level keys keep their meaning (first leg) so single-sport consumers are unchanged. Legs are split by session
+start times rather than `first_lap_index`, which counts dropped empty laps. After upgrading, `garmin-coach fit
+reparse` rebuilds every summary of version 1 from the kept ZIPs, without Garmin calls.

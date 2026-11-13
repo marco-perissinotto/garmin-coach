@@ -729,6 +729,26 @@ class CoachService:
         }) for z in zones]
         return self._reply(fr, zones=out, athlete_overrides=_clean({"max_hr": a.max_hr, "lthr": a.lthr, "ftp": a.ftp}))
 
+    # -- dashboard ------------------------------------------------------------------------------------------------
+    @_safe
+    def open_dashboard(self, open_browser: bool = True, max_age_minutes: int | None = None) -> dict[str, Any]:
+        from ..dashboard import build as dashboard
+
+        with self._conn() as conn:
+            fr = self._fresh(conn, render.PACK_TIERS["daily"], _max_age(max_age_minutes))
+            payload = dashboard.payload(conn, self.app.paths, self.app.settings, clock=self.app.clock, freshness=fr)
+            path = dashboard.page_path(self.app.paths)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(dashboard.render(payload), encoding="utf-8")
+            tmp.replace(path)
+        opened = dashboard.open_in_browser(path) if open_browser else False
+        ins = payload["insights"]
+        return self._reply(fr, path=str(path), url=path.resolve().as_uri(), opened=opened, summary=ins["summary"],
+                           insights={g: [{"title": i["title"], "text": i["text"]} for i in items]
+                                     for g, items in ins["groups"].items()},
+                           patterns=[{"title": p["title"], "text": p["text"]} for p in ins["patterns"]])
+
     # -- sync control ---------------------------------------------------------------------------------------------
     @_safe
     def get_sync_status(self) -> dict[str, Any]:

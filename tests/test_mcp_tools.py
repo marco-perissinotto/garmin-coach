@@ -409,7 +409,7 @@ EXPECTED_TOOLS = {
     "get_daily_brief", "get_athlete_profile", "get_events", "get_context_pack", "get_range_summary",
     "get_training_load", "list_activities", "get_activity", "get_sleep", "get_hrv", "get_body_battery",
     "get_heart_rate", "get_weight", "get_hr_zones", "append_coach_note", "get_sync_status", "refresh", "cancel_job",
-    "get_coaching_state", "update_coaching_state",
+    "get_coaching_state", "update_coaching_state", "open_dashboard",
 }
 
 

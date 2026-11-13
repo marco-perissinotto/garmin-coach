@@ -74,5 +74,7 @@ class App:
     def post_run(self, conn: sqlite3.Connection) -> None:
         """After a refresh stored new data: recompute metrics and re-render the packs (never raises)."""
         from .context.render import after_sync  # lazy: keeps MCP boot light
+        from .dashboard import build as dashboard
 
         after_sync(conn, self.paths, self.settings, self.clock)
+        dashboard.after_sync(conn, self.paths, self.settings, self.clock)

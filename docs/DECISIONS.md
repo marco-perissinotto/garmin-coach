@@ -414,3 +414,29 @@ would still need the cloned repo, `uv`, the key file and the profile link, so it
 would have to ship a Python environment per platform. Skipped; reconsider only if the server ever runs without the
 repo.
 
+## Scope: optional items dropped (2026-11-13)
+
+**D-092 No nutrition, no ChatGPT workflow, no browser tunnel.** Three optional items of PLAN Phases 5 and 6 are closed
+by the owner's decision. Nutrition: the owner does not log food in Garmin Connect and does not plan to, so the food-log
+endpoint (#24) would always return nothing; `optional_endpoints.nutrition` stays `false` and the packs get no nutrition
+section. The endpoint stays in the catalogue: it costs no call while the flag is off. ChatGPT: no longer used, so
+`context export --clipboard` is not built; `context export --zip` already exists and stays, since it is only the
+rendered packs. Tunnel: no Cloudflare Tunnel and no remote connector, neither for ChatGPT nor for claude.ai in the
+browser; the Mac reaches the server from Claude Desktop over stdio. `mcp --http` stays as built in Phase 3, bound to
+`127.0.0.1`. Still optional and open: hydration and SpO2 in the packs, and the local dashboard.
+
+## Phase 6: local dashboard (2026-11-13)
+
+**D-093 A static page that reads the data, not a dashboard server.** PLAN Phase 6 offered Streamlit or a static page
+from `context.json`. The owner asked for a page that "tells me something I don't know" next to the coaching chat.
+Chosen: one self-contained HTML file at `<app data>/dashboard/index.html`, built by `dashboard/` from the cache
+(not from `context.json`, which holds 4 weeks: the page needs three years of daily series and the whole CTL history),
+with the same load functions as the packs. No server, no dependency, no CDN: inline SVG charts and a small script,
+so it opens offline, in both themes, at phone width. What makes it more than charts is `insights.py`: rule-based
+findings in four groups (strong, declining, focus, watch) plus patterns from the athlete's own history, each quoting
+its numbers and sample size, thresholds written down in docs/DASHBOARD.md. An LLM is not used to write them: the
+same numbers must give the same sentences, and the chat is where interpretation happens; `open_dashboard` returns the
+findings to the coach, and the page's «Chiedi al coach» buttons copy a finding into the chat. The target-event view
+compares the current season with past editions of the same race at the same number of days out, the comparison the
+owner cannot get from Garmin Connect. Rebuilt after every sync only once the owner created it (`auto_update`), so a
+sync never writes a file nobody asked for. Not in the shared profile folder: it holds health data, like the database.

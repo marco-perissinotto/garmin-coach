@@ -35,7 +35,7 @@ class Efficiency:
         return (self.recent / self.previous - 1) * 100
 
 
-def _steady(a: dict[str, Any], lthr: int | None) -> bool:
+def is_steady(a: dict[str, Any], lthr: int | None) -> bool:
     """Long enough and mostly aerobic: average HR below 90% of threshold HR (or below 150 bpm if unknown)."""
     hr = a.get("avg_hr")
     limit = lthr * 0.9 if lthr else 150
@@ -53,10 +53,10 @@ def efficiency(activities: Sequence[dict[str, Any]], today: date, lthr_run: int 
             continue
         fam, indoor = family(a.get("type_key")), is_indoor(a.get("type_key"))
         value = None
-        if fam == RUN and _steady(a, lthr_run):
+        if fam == RUN and is_steady(a, lthr_run):
             speed = a.get("avg_gap_speed_mps") or a.get("avg_speed_mps")
             value = speed * 60 / a["avg_hr"] if speed else None  # metres per heartbeat
-        elif fam == BIKE and _steady(a, lthr_bike):
+        elif fam == BIKE and is_steady(a, lthr_bike):
             watts = a.get("norm_power") or a.get("avg_power")
             value = watts / a["avg_hr"] if watts else None  # watts per bpm
         if value is None:

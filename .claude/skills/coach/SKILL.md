@@ -1,6 +1,6 @@
 ---
 name: coach
-description: Garmin endurance coach. Daily check-in from the garmin-coach MCP tools ("/coach"), weekly review ("/coach week"), next-week plan ("/coach plan"), race readiness ("/coach race <event>"), data status ("/coach status"), loading past FIT files ("/coach fit"). Use when the user asks how to train today, how the week went, how a specific workout went, or whether their Garmin data is up to date.
+description: Garmin endurance coach. Daily check-in from the garmin-coach MCP tools ("/coach"), weekly review ("/coach week"), next-week plan ("/coach plan"), race readiness ("/coach race <event>"), data status ("/coach status"), loading past FIT files ("/coach fit"), the local dashboard ("/coach dashboard"). Use when the user asks how to train today, how the week went, how a specific workout went, whether their Garmin data is up to date, or for the dashboard.
 ---
 
 # Garmin coach
@@ -50,6 +50,9 @@ the athlete agreed on the content.
 - `fit`: `refresh(scope="fit")`, then `get_sync_status`; report the coverage (`fit` block) and explain that the past
   FIT files load in the background in chained jobs that pause whenever a question needs Garmin, and that
   `/coach status` shows the progress.
+- `dashboard`: `open_dashboard`, then in three or four lines: the summary, the one strength and the one focus that
+  matter most for the next event, and anything under `watch`. Offer to turn a focus item into the plan. The page has
+  a «Chiedi al coach» button that copies a finding: when the user pastes one, answer it with the usual tools.
 - `sync` / "I just synced my watch": `refresh(tiers=["A","B"], force=true)`, then `get_sync_status` until the job
   is done, then the daily check-in.
 

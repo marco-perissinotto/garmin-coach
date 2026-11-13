@@ -270,6 +270,17 @@ def build_server(app: App, *, http_token: str | None = None, port: int = 8765) -
             None if decisions is None else decisions.model_dump(exclude_none=True), confirm)
 
     @mcp.tool()
+    def open_dashboard(open_browser: Annotated[bool, Field(description=(
+                           "Open the page in the default browser of this machine."))] = True,
+                       max_age_minutes: MaxAge = None) -> dict[str, Any]:
+        """Rebuild the athlete's local dashboard (one HTML page: form and load, the target event against past
+        seasons, volume and intensity, run/bike/swim trends, health and sleep, the agreed plan, recent activities)
+        and open it in the browser. Returns the file path and the page's findings: `summary`, `insights` grouped as
+        strong / down / focus / watch, and `patterns` from the athlete's own history. Use it when the user asks for
+        the dashboard, and discuss the findings with them; never contacts Garmin beyond the usual daily refresh."""
+        return service.open_dashboard(open_browser, max_age_minutes)
+
+    @mcp.tool()
     def get_sync_status() -> dict[str, Any]:
         """State of the local Garmin cache: whether history is loaded, age of each data tier vs its TTL,
         the running sync job with progress (calls_done/calls_planned) and ETA, recent jobs, cooldowns and last

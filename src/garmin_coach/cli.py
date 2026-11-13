@@ -532,7 +532,7 @@ def context_build(
 
 @context_cli.command("export")
 def context_export(
-    zip_: Annotated[bool, typer.Option("--zip", help="Bundle the packs into a zip (e.g. for a ChatGPT Project).")] = True,
+    zip_: Annotated[bool, typer.Option("--zip", help="Bundle the packs into a zip.")] = True,
     offline: Annotated[bool, typer.Option("--offline", help="Never contact Garmin: export from the cache.")] = False,
 ) -> None:
     """Refresh everything (unless --offline), rebuild the packs and bundle them."""
@@ -543,6 +543,23 @@ def context_export(
     render.build_and_render(a.conn, a.paths, a.settings, clock=a.clock, freshness=fr)
     target = render.export_zip(a.paths, a.clock) if zip_ else a.paths.context_dir
     err.print(f"exported: {target}")
+
+
+@app_cli.command()
+def dashboard(
+    open_: Annotated[bool, typer.Option("--open", help="Open the page in the default browser.")] = False,
+    refresh: Annotated[bool, typer.Option("--refresh", help="Refresh today's data from Garmin first.")] = False,
+) -> None:
+    """Build the local dashboard (<app data>/dashboard/index.html) from the cache; it updates itself after every sync."""
+    from .context import render
+    from .dashboard import build as dashboard_m
+
+    a = _app()
+    fr = _fresh(a, set(render.PACK_TIERS["daily"]), None) if refresh else None
+    path = dashboard_m.build(a.conn, a.paths, a.settings, clock=a.clock, freshness=fr)
+    err.print(f"dashboard: {path}")
+    if open_ and not dashboard_m.open_in_browser(path):
+        err.print("could not open a browser: open the file above by hand")
 
 
 @app_cli.command()

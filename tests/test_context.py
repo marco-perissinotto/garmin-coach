@@ -115,7 +115,8 @@ def test_daily_brief_full_data(full, paths: Paths, settings: Settings, clock: Fa
     assert "Test Athlete" in texts["athlete"] and "Corre dal 2018" in texts["athlete"]
     assert "Lunghi nel weekend" in texts["athlete"]
     assert "get_daily_brief" in texts["coach-instructions"] and "Test Athlete" not in texts["coach-instructions"]
-    assert fmt.approx_tokens(texts["coach-instructions"]) <= 450
+    # the full rules for clients without the /coach skill (Claude Desktop, a Project), D-090
+    assert fmt.approx_tokens(texts["coach-instructions"]) <= 1800
     # files written
     for n in render.PACKS:
         assert (paths.context_dir / f"{n}.md").exists()
@@ -287,3 +288,29 @@ def test_week_table_covers_four_weeks(full, paths: Paths, settings: Settings, cl
     assert len(pack.weeks) == 4 and pack.weeks[0]["label"].endswith("(in corso)")
     assert len(pack.days7) == 7 and len(pack.days28) == 28
     assert pack.days28[-1]["day"].endswith(f"{(clock().astimezone().date() - timedelta(days=27)):%d/%m}")
+
+
+# -- coaching rules for Claude Desktop (D-090) ------------------------------------------------------------------------
+SKILL = Path(__file__).resolve().parents[1] / ".claude" / "skills" / "coach" / "SKILL.md"
+# fields and values of the tool replies that the rules must name, beside every tool the skill names
+RULE_TOKENS = ("freshness", "history_loaded", "key_warning", "coaching_state", "plan_expired", "problems",
+               "coach_notes_md", "symptoms", "plan", "decisions", "confirm=true", "since", "include_laps",
+               "include_series", "zones", "intervals", "laps", "dynamics", "decoupling_pct",
+               "first_to_last_speed_pct", "first_to_last_hr", "fit_status", "no_file", "parse_error", "disabled",
+               "skipped_type", "not_downloaded", 'scope="fit"', "history.md")
+
+
+@pytest.mark.parametrize("language", ["it", "en"])
+def test_coach_instructions_mirror_the_skill(language: str) -> None:
+    import re
+    from types import SimpleNamespace
+
+    text = render.env().get_template("coach-instructions.md.j2").render(
+        p=SimpleNamespace(athlete=SimpleNamespace(language=language)))
+    tools = set(re.findall(r"\b(?:get|list|update|append)_[a-z_]+\(?", SKILL.read_text(encoding="utf-8")))
+    tools = {t.rstrip("(") for t in tools} | {"refresh"}
+    assert {"get_daily_brief", "update_coaching_state", "append_coach_note", "get_activity"} <= tools
+    missing = [t for t in sorted(tools) + list(RULE_TOKENS) if t not in text]
+    assert not missing, f"named in SKILL.md but not in the {language} instructions: {missing}"
+    assert "Maintainers" not in text  # the template comment is not rendered
+

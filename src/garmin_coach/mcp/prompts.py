@@ -35,15 +35,20 @@ _TEXT = {
             "Fai il check-in di oggi come mio allenatore, usando il brief del giorno, il mio profilo (storia e regole "
             "concordate) e gli eventi qui sotto. Dimmi: 1) l'allenamento di oggi (tipo, durata, intensità in zone "
             "FC, potenza o passo), 2) perché, in poche righe, 3) cosa osservare e quando cambiare piano. Se i dati "
-            "non sono aggiornati o lo storico è ancora in caricamento, dillo prima di tutto."),
+            "non sono aggiornati o lo storico è ancora in caricamento, dillo prima di tutto. Se la seduta chiave di "
+            "ieri merita un commento, usa la sua analisi FIT (`get_activity` con `include_laps=true`). Quando siamo "
+            "d'accordo, registra ciò che è cambiato (`update_coaching_state`, `append_coach_note`)."),
         "weekly_review": (
             "Fai la revisione della settimana usando i dati degli ultimi 7 e 28 giorni qui sotto: cosa è andato "
             "bene, cosa no (carico, intensità, recupero, sonno), e cosa cambiare la prossima settimana tenendo "
-            "conto degli eventi in programma e delle regole concordate."),
+            "conto degli eventi in programma e delle regole concordate. Per le sedute chiave usa l'analisi FIT "
+            "(`get_activity` con `include_laps=true`): ripetute, zone, deriva cardiaca."),
         "plan_week": (
             "Prepara il piano dei prossimi 7 giorni, giorno per giorno (seduta, durata, intensità), rispettando la "
             "mia disponibilità, i vincoli, le regole concordate e la fase verso il prossimo evento. Parti dal carico "
-            "e dal recupero attuali qui sotto e spiega in breve la logica della settimana."),
+            "e dal recupero attuali qui sotto e spiega in breve la logica della settimana. Quando sono d'accordo, "
+            "scrivi il piano nello stato di coaching (`update_coaching_state`, sezione `plan`, con le condizioni "
+            "che lo cambiano)."),
         "race_readiness": (
             "Valuta come arrivo all'evento «{event}»: fase attuale, cosa fare da qui alla gara (incluso lo scarico), "
             "forma prevista rispetto all'obiettivo e ai risultati passati nella mia storia. Sii esplicito sulle "
@@ -53,20 +58,27 @@ _TEXT = {
             "Spiegami la metrica «{name}» in modo semplice: cosa misura, come è calcolata qui (vedi la definizione "
             "sotto), come leggere il mio valore attuale nel brief e quali limiti ha. Niente formule se non servono."),
         "answer": "Rispondi in italiano, in modo diretto e concreto.",
+        "rules": ("Se non hai già le regole di coaching di garmin-coach, leggile prima con "
+                  "`get_context_pack(name=\"instructions\")` e seguile."),
     },
     "en": {
         "daily_checkin": (
             "Do today's check-in as my coach, using today's brief, my profile (history and agreed rules) and the "
             "events below. Tell me: 1) today's session (type, duration, intensity as HR/power/pace zones), 2) why, in "
             "a few lines, 3) what to watch and when to change the plan. If the data is stale or the history is still "
-            "loading, say so first."),
+            "loading, say so first. If yesterday's key session deserves a comment, use its FIT analysis "
+            "(`get_activity` with `include_laps=true`). Once we agree, record what changed "
+            "(`update_coaching_state`, `append_coach_note`)."),
         "weekly_review": (
             "Review my week using the last-7-day and last-28-day data below: what went well, what did not (load, "
-            "intensity, recovery, sleep), and what to change next week given the upcoming events and agreed rules."),
+            "intensity, recovery, sleep), and what to change next week given the upcoming events and agreed rules. "
+            "For the key sessions use the FIT analysis (`get_activity` with `include_laps=true`): reps, zones, "
+            "decoupling."),
         "plan_week": (
             "Plan the next 7 days, day by day (session, duration, intensity), respecting my availability, "
             "constraints, the agreed rules and the phase towards the next event. Start from the current load and "
-            "recovery below and explain the logic of the week briefly."),
+            "recovery below and explain the logic of the week briefly. Once I agree, write the plan into the coaching "
+            "state (`update_coaching_state`, section `plan`, with the conditions that change it)."),
         "race_readiness": (
             "Assess how I am heading into «{event}»: current phase, what to do until race day (taper included), "
             "expected form against the goal and my past results. Be explicit about uncertainty: these metrics are "
@@ -76,6 +88,8 @@ _TEXT = {
             "Explain the metric «{name}» simply: what it measures, how it is computed here (definition below), how "
             "to read my current value in the brief, and its limits. No formulas unless needed."),
         "answer": "Answer in {language}, directly and concretely.",
+        "rules": ("Unless you already have the garmin-coach coaching rules, read them first with "
+                  "`get_context_pack(name=\"instructions\")` and follow them."),
     },
 }
 
@@ -93,7 +107,7 @@ class Prompts:
         packs, _ = self.service.pack_texts(aliases)
         body = "\n\n---\n\n".join(packs.values())
         answer = text["answer"].format(language=lang)
-        return f"{intro}\n\n{answer}\n\n---\n\n{extra}{body}"
+        return f"{intro}\n\n{text['rules']}\n{answer}\n\n---\n\n{extra}{body}"
 
     def daily_checkin(self) -> str:
         text, _ = self._lang()

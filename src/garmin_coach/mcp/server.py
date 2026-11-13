@@ -31,7 +31,9 @@ says so), durations in seconds (or as stated), heart rate in bpm, power in watts
 Per-activity FIT data (laps, intervals, HR/power zones, dynamics, decoupling) is in `get_activity.fit` when `fit_status`
 is `ok`; `refresh(scope="fit")` loads the past. The athlete's personal files may live in a folder shared between
 machines: when the brief flags it as not reachable or with conflict copies, or a reply carries `key_warning`, tell
-the user before advising."""
+the user before advising. Unless you were already given the garmin-coach coaching rules (the /coach skill in Claude
+Code, or a Claude Project with these instructions), read them first with get_context_pack(name="instructions") and
+follow them: they say when to record the coaching state and how to analyse a session."""
 
 MaxAge = Annotated[int | None, Field(
     description="Maximum acceptable cache age in minutes. Omit for the default TTL; 0 forces a refresh from Garmin "

@@ -83,10 +83,10 @@ stampa il comando successivo da lanciare (per esempio quello per collegare Claud
 
 | Dove | Come |
 |---|---|
-| Claude Desktop | `uv run garmin-coach install claude-desktop`, poi chiudi Claude Desktop del tutto (anche dall'icona nell'area di notifica) e riaprilo. Il comando aggiunge la voce `garmin-coach` a `claude_desktop_config.json` con percorsi assoluti, lascia intatte le altre voci e salva una copia `.bak`. Con `--dry-run` mostra solo cosa scriverebbe. Funziona anche con la versione di Claude Desktop installata dal Microsoft Store |
+| Claude Desktop | `uv run garmin-coach install claude-desktop`, poi chiudi Claude Desktop del tutto (anche dall'icona nell'area di notifica) e riaprilo. Il comando aggiunge la voce `garmin-coach` a `claude_desktop_config.json` con percorsi assoluti, lascia intatte le altre voci e salva una copia `.bak`. Con `--dry-run` mostra solo cosa scriverebbe. Funziona anche con la versione di Claude Desktop installata dal Microsoft Store e su macOS. Claude Desktop non ha il comando `/coach`: le stesse regole (stato di coaching, analisi FIT, cosa registrare) le legge da sé con `get_context_pack("instructions")`, oppure le metti come istruzioni di un Project (riga sotto). In Claude Desktop i prompt del server (check-in, revisione, piano...) sono nel menu «+» della chat |
 | Claude Code, in questa cartella | Niente da fare: il file `.mcp.json` del repo registra il server (Claude Code chiede conferma la prima volta). Il comando `/coach` fa il check-in del giorno; `/coach week` la revisione della settimana, `/coach plan` il piano dei prossimi 7 giorni, `/coach status` lo stato dei dati |
 | Claude Code, in qualsiasi cartella | `uv run garmin-coach install claude-code --scope user` |
-| Project di Claude | Crea un Project "Garmin coach" e incolla come istruzioni il testo di `garmin-coach context show instructions`. Non contiene dati personali: tutto il resto arriva dal server MCP |
+| Project di Claude (consigliato con Claude Desktop) | Crea un Project "Garmin coach" e incolla come istruzioni il testo di `garmin-coach context show instructions --offline` (su macOS: `... \| pbcopy` lo copia negli appunti). Sono le stesse regole della skill `/coach`, nella lingua del profilo; non contengono dati personali, tutto il resto arriva dal server MCP. Dopo un aggiornamento del programma che cambia le regole, incollale di nuovo |
 
 Al primo avvio su una cache vuota il server fa partire da solo il caricamento dello storico; nel frattempo puoi
 chiedere a Claude "i miei dati sono caricati?" e ti risponde con l'avanzamento.

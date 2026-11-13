@@ -837,6 +837,9 @@ decisions:
    show|link|unlink`, D-085..D-089). The owner's Mac uses Claude Desktop (local MCP servers do not work in claude.ai
    in the browser). Still to do by the owner: link the profile on both machines and run the acceptance below.
 1b. `garmin-coach build-mcpb` → `garmin-coach.mcpb` for one-click install in Claude Desktop (§9.1).
+   **Dropped 2026-11-13** (D-091): `install claude-desktop` does the same on macOS. Instead, the coaching rules of the
+   /coach skill now reach Claude Desktop through the `instructions` pack, the server instructions and the prompts
+   (D-090).
 2. Key-expiry reminder: `status`, `get_sync_status` and the daily brief warn when key age (stored at `doctor` time in the app data dir) > 350 days.
    **Implemented 2026-11-13** from the key file's modification time: `doctor`, `status`, `get_sync_status.key_warning`
    and a `key_warning` field in every data tool reply, the brief included (D-089).

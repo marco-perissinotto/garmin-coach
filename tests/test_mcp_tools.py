@@ -455,6 +455,9 @@ def test_server_registers_everything_and_answers(warmed) -> None:  # type: ignor
                 "daily_checkin", "weekly_review", "plan_week", "race_readiness", "explain_metric"}
             msg = (await client.get_prompt("daily_checkin")).messages[0].content.text  # type: ignore[union-attr]
             assert "check-in" in msg and "# Brief del giorno" in msg and "# Profilo atleta" in msg
+            assert 'get_context_pack(name="instructions")' in msg and "update_coaching_state" in msg
+            res = await client.call_tool("get_context_pack", {"name": "instructions"})
+            assert "update_coaching_state(confirm=true)" in res.content[0].text  # type: ignore[union-attr]
             msg = (await client.get_prompt("race_readiness", {"event": "70.3"})).messages[0].content.text  # type: ignore[union-attr]
             assert "Test 70.3" in msg
             msg = (await client.get_prompt("explain_metric", {"name": "TSB"})).messages[0].content.text  # type: ignore[union-attr]
@@ -632,3 +635,10 @@ def test_daily_brief_carries_the_state_but_not_for_past_days(warmed) -> None:  #
     assert not brief["coaching_state"]["stale"]
     past = svc.get_daily_brief(date_="2026-10-20")
     assert "error" not in past and "coaching_state" not in past
+
+
+def test_server_instructions_point_to_the_rules() -> None:
+    from garmin_coach.mcp.server import INSTRUCTIONS
+
+    assert 'get_context_pack(name="instructions")' in INSTRUCTIONS and "key_warning" in INSTRUCTIONS
+

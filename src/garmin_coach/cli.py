@@ -668,8 +668,9 @@ def install_desktop(
         err.print(f"already registered in {res.path}")
     else:
         err.print(f"registered in {res.path}" + (f" (backup: {res.backup.name})" if res.backup else ""))
-    err.print("Next: quit Claude Desktop completely (also from the tray) and start it again, then ask "
-              "\"How should I train today?\"")
+    err.print("Next: quit Claude Desktop completely (Windows: also from the tray; macOS: Cmd+Q) and start it "
+              "again. Optionally create a Project and paste as its instructions the output of: garmin-coach context "
+              "show instructions --offline. Then ask \"How should I train today?\"")
 
 
 @install_cli.command("claude-code")

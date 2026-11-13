@@ -394,3 +394,23 @@ brief included) as `key_warning`, added in `_reply` next to the missing-key erro
 builder stays independent of the machine's key file, so the golden tests do not depend on it. A key copied by hand to
 the second machine gets a new modification time there, so that machine warns later than the first: the first one to
 warn is right.
+
+**D-090 The coaching rules reach Claude Desktop too.** The /coach skill holds the rules that make the coach useful
+across chats (read and confirm the coaching state, record it once at the end, what never goes into it, FIT session
+analysis, the warnings about data, key and profile folder). Claude Desktop has no skills: it only saw the short server
+instructions, the five prompts and the six-line Project text of Phase 2. Now: `coach-instructions.md.j2` (the
+`instructions` pack, in the owner's `advice_language`) carries the full rules, mirrored from SKILL.md without the
+Claude Code-only parts (`$ARGUMENTS`, `/coach` arguments, the one-off migration from `coach-notes.md`); the server
+instructions tell a client that was not given the rules to read them with `get_context_pack(name="instructions")`;
+every prompt carries the same pointer, and `daily_checkin`, `weekly_review` and `plan_week` name the FIT analysis and
+the state writes. The Project text grows from ~450 to ~1 500 tokens, read once per chat. To keep the two copies in
+step, `tests/test_context.py` checks that every tool the skill names, and a list of reply fields, appear in both
+languages of the template. A single source (the skill reading the pack) was considered and rejected: the skill would
+cost one more tool call per chat and Claude Code would lose the rules while the server is down.
+
+**D-091 No `.mcpb` bundle.** PLAN 4.1b planned `garmin-coach build-mcpb` for a one-click install on the Mac. The bundle
+would still need the cloned repo, `uv`, the key file and the profile link, so it saves only the
+`install claude-desktop` command, which already writes absolute paths and works on macOS; a self-contained bundle
+would have to ship a Python environment per platform. Skipped; reconsider only if the server ever runs without the
+repo.
+

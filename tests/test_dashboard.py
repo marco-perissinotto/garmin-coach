@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from fakes import FakeClock
 from test_context import full  # noqa: F401 - fixture: fake account + inputs, history and tiers loaded
-from test_mcp_tools import warmed  # noqa: F401 - fixture: warmed MCP service
+from test_mcp_tools import _key_present, warmed  # noqa: F401 - fixtures: key file present (autouse), warmed service
 
 from garmin_coach.athlete import load_inputs
 from garmin_coach.dashboard import build, data, insights

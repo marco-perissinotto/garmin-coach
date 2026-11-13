@@ -346,3 +346,71 @@ tags laps with `leg` and computes their cadence by the leg's sport, and drops th
 The top-level keys keep their meaning (first leg) so single-sport consumers are unchanged. Legs are split by session
 start times rather than `first_lap_index`, which counts dropped empty laps. After upgrading, `garmin-coach fit
 reparse` rebuilds every summary of version 1 from the kept ZIPs, without Garmin calls.
+
+## Phase 4: shared profile and key warning (2026-11-13)
+
+**D-085 The profile is shared through a synced folder, not copied by hand.** PLAN §5.1 said to copy `config/` between
+machines by hand or keep it in a private git repo. With the coaching state rewritten in every chat and a second
+machine in use (a Mac with Claude Desktop), a hand copy diverges within days. Considered: (a) a private git repo
+inside `config/` with pull at server start and commit + push after each write; (b) a folder of a sync client the
+owner already runs on both machines (Google Drive, personal account). Chosen (b): one user, one machine at a time,
+six small text files; no commands to remember, hand edits propagate, and no merge logic to write and test. The price
+is hard rule 8, relaxed for these files only: the key, the database and the FIT files stay local, and `doctor` still
+fails when the repo, the app data dir or the key sit in a synced folder. The link is a one-line pointer file
+`<app data>/profile-path` read by `Paths.shared_profile`: it is per machine (the folder has a different path on each
+OS), it works for the CLI and the MCP server alike, and nothing has to be written into Claude's config. No environment
+variable was added. `settings.yaml` is shared too: it holds no machine-specific value today.
+
+**D-086 `profile link` never merges.** An empty folder receives this machine's files (the CLI asks first, because on
+the second machine an empty folder usually means "the sync client has not downloaded it yet"); a folder that already
+holds a profile is used as it is. The local files are never deleted: they stay in `<app data>/config/` as the backup
+of the day of the link, unread, and `profile link` lists those that differ from the shared ones. `profile unlink`
+copies the shared files back (a differing local file is kept as `<name>.bak-<date>`) and removes the pointer; the
+shared folder is left untouched.
+
+**D-087 A linked folder that is missing is reported, never created.** When the sync client is not running the folder
+does not exist (Windows: no `G:` drive) or cannot be read (macOS). Creating it would start a second, empty
+profile exactly where the client will later mount the real one. So `Paths.ensure()` does not create a linked folder;
+writes go through `Paths.writable_config_dir()`, which raises `ProfileUnavailable` (the note and state tools answer
+with that message); `load_inputs` reports one problem instead of four "mancante"; `load_state` reports the state as
+not available instead of "no state yet", so the coach does not start a new one; `doctor` fails on it and skips the
+per-file checks. The startup check does not backfill an empty cache meanwhile: `sync.backfill_days` lives in the
+shared `settings.yaml`, and loading the default year instead of the configured history would be a silent surprise. Settings are
+read once per process: after the folder comes back, the server must be restarted to pick up `settings.yaml`.
+
+**D-088 Conflict copies are detected by name, not resolved.** A sync client that receives two versions of a file keeps
+both under a second name: `name (1).ext` (Google Drive), `name (conflicted copy ...).ext` (Dropbox), `name-HOST.ext`
+(OneDrive), `name 2.ext` (iCloud). `profile.conflict_copies` lists the files of a linked folder whose name is a profile
+file's stem followed by a space, `(`, `-` or `_` and the same extension; `.bak-*`, `.tmp` and `*.example.*` do not
+match. They are shown by `doctor` (warning), `status`, `get_sync_status.profile.conflicts`, `profile show` and as a
+brief flag. The program cannot know which version the owner wants, so it does not choose. The state file is still
+written through a `.tmp` file next to it and `os.replace`: the temporary file lives for milliseconds and must be on
+the same volume as the target. To verify live: that the replace is atomic on the Drive volume of both machines.
+
+**D-089 Key expiry warning from the file's age.** PLAN Phase 4.2 planned to store the key's date at `doctor` time. The
+key file's modification time is already used by `doctor` and `status` and needs no extra state: `secrets.key_warning`
+returns a line above 350 days. It is in `status`, in `get_sync_status.key_warning` and in every data tool reply (the
+brief included) as `key_warning`, added in `_reply` next to the missing-key error. It is not a brief flag: the pack
+builder stays independent of the machine's key file, so the golden tests do not depend on it. A key copied by hand to
+the second machine gets a new modification time there, so that machine warns later than the first: the first one to
+warn is right.
+
+**D-090 The coaching rules reach Claude Desktop too.** The /coach skill holds the rules that make the coach useful
+across chats (read and confirm the coaching state, record it once at the end, what never goes into it, FIT session
+analysis, the warnings about data, key and profile folder). Claude Desktop has no skills: it only saw the short server
+instructions, the five prompts and the six-line Project text of Phase 2. Now: `coach-instructions.md.j2` (the
+`instructions` pack, in the owner's `advice_language`) carries the full rules, mirrored from SKILL.md without the
+Claude Code-only parts (`$ARGUMENTS`, `/coach` arguments, the one-off migration from `coach-notes.md`); the server
+instructions tell a client that was not given the rules to read them with `get_context_pack(name="instructions")`;
+every prompt carries the same pointer, and `daily_checkin`, `weekly_review` and `plan_week` name the FIT analysis and
+the state writes. The Project text grows from ~450 to ~1 500 tokens, read once per chat. To keep the two copies in
+step, `tests/test_context.py` checks that every tool the skill names, and a list of reply fields, appear in both
+languages of the template. A single source (the skill reading the pack) was considered and rejected: the skill would
+cost one more tool call per chat and Claude Code would lose the rules while the server is down.
+
+**D-091 No `.mcpb` bundle.** PLAN 4.1b planned `garmin-coach build-mcpb` for a one-click install on the Mac. The bundle
+would still need the cloned repo, `uv`, the key file and the profile link, so it saves only the
+`install claude-desktop` command, which already writes absolute paths and works on macOS; a self-contained bundle
+would have to ship a Python environment per platform. Skipped; reconsider only if the server ever runs without the
+repo.
+

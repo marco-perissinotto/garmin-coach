@@ -17,6 +17,12 @@ HOME_ENV_VAR = "GARMIN_COACH_HOME"
 CONFIG_FILES = ("athlete.yaml", "events.yaml")
 KNOWLEDGE_FILES = ("history.md", "coach-notes.md")
 STATE_FILE = "coaching-state.yaml"  # optional short-term coaching state (PLAN §11.3), not a required input
+PROFILE_FILES = (*CONFIG_FILES, *KNOWLEDGE_FILES, STATE_FILE, "settings.yaml")  # what `profile link` shares (D-085)
+PROFILE_POINTER = "profile-path"  # one line in the app data dir: the folder that replaces <home>/config
+
+
+class ProfileUnavailable(OSError):
+    """A write was asked while the linked profile folder is not there (sync client not running, folder offline)."""
 
 
 @dataclass(frozen=True)
@@ -24,8 +30,38 @@ class Paths:
     home: Path
 
     @property
-    def config_dir(self) -> Path:
+    def local_config_dir(self) -> Path:
         return self.home / "config"
+
+    @property
+    def profile_pointer(self) -> Path:
+        return self.home / PROFILE_POINTER
+
+    @property
+    def shared_profile(self) -> Path | None:
+        """The folder set by `garmin-coach profile link`, or None when the personal files are local (D-085)."""
+        try:
+            text = self.profile_pointer.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return None
+        return Path(text) if text else None
+
+    @property
+    def config_dir(self) -> Path:
+        """Where the personal files are read from: the linked folder if there is one, else ``<home>/config``."""
+        return self.shared_profile or self.local_config_dir
+
+    def writable_config_dir(self) -> Path:
+        """The folder for a write. A linked folder that is missing is never created: where the sync client is not
+        running, that would start a second, empty profile next to the real one (D-087)."""
+        shared = self.shared_profile
+        if shared is None:
+            self.local_config_dir.mkdir(parents=True, exist_ok=True)
+            return self.local_config_dir
+        if not shared.is_dir():
+            raise ProfileUnavailable(f"the shared profile folder {shared} is not reachable: start the sync client "
+                                     "(and keep the folder available offline), then retry")
+        return shared
 
     @property
     def db(self) -> Path:
@@ -56,7 +92,10 @@ class Paths:
         return self.config_dir / "settings.yaml"
 
     def ensure(self) -> Paths:
-        for d in (self.home, self.config_dir, self.logs_dir):
+        dirs = [self.home, self.logs_dir]
+        if self.shared_profile is None:
+            dirs.append(self.local_config_dir)
+        for d in dirs:
             d.mkdir(parents=True, exist_ok=True)
         return self
 
@@ -157,5 +196,6 @@ def is_cloud_synced(path: Path) -> bool:
     for root in filter(None, roots):
         if resolved.startswith(str(Path(root).resolve()).lower()):
             return True
-    markers = ("onedrive", "icloud", "mobile documents", "dropbox", "google drive")
+    # "cloudstorage" / "googledrive": macOS File Provider mounts (~/Library/CloudStorage/GoogleDrive-<account>/...)
+    markers = ("onedrive", "icloud", "mobile documents", "dropbox", "google drive", "googledrive", "cloudstorage")
     return any(m in resolved for m in markers)

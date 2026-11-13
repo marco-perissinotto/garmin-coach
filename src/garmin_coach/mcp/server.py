@@ -29,7 +29,11 @@ tool returns a `freshness` object: if `stale` is true or `history_loaded` is fal
 Readiness is a local heuristic, not Garmin's Training Readiness. Units: distances in metres (or km when the field name
 says so), durations in seconds (or as stated), heart rate in bpm, power in watts, HRV in ms. Pack texts are Italian.
 Per-activity FIT data (laps, intervals, HR/power zones, dynamics, decoupling) is in `get_activity.fit` when `fit_status`
-is `ok`; `refresh(scope="fit")` loads the past."""
+is `ok`; `refresh(scope="fit")` loads the past. The athlete's personal files may live in a folder shared between
+machines: when the brief flags it as not reachable or with conflict copies, or a reply carries `key_warning`, tell
+the user before advising. Unless you were already given the garmin-coach coaching rules (the /coach skill in Claude
+Code, or a Claude Project with these instructions), read them first with get_context_pack(name="instructions") and
+follow them: they say when to record the coaching state and how to analyse a session."""
 
 MaxAge = Annotated[int | None, Field(
     description="Maximum acceptable cache age in minutes. Omit for the default TTL; 0 forces a refresh from Garmin "
@@ -269,8 +273,10 @@ def build_server(app: App, *, http_token: str | None = None, port: int = 8765) -
     def get_sync_status() -> dict[str, Any]:
         """State of the local Garmin cache: whether history is loaded, age of each data tier vs its TTL,
         the running sync job with progress (calls_done/calls_planned) and ETA, recent jobs, cooldowns and last
-        error, and `fit` (FIT files: ok / pending / no file / parse errors, disk use, running FIT job). Use it to answer
-        "is my data up to date / loaded?". Never contacts Garmin."""
+        error, `fit` (FIT files: ok / pending / no file / parse errors, disk use, running FIT job), `profile` (the
+        folder of the personal files, whether it is shared between machines and reachable, conflict copies) and
+        `key_warning` (set when the Garmin key is about to expire). Use it to answer "is my data up to date /
+        loaded?". Never contacts Garmin."""
         return service.get_sync_status()
 
     @mcp.tool()

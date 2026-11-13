@@ -45,6 +45,11 @@ def startup_check(
         return None
     running = active_jobs(conn)
     if repo.is_cache_empty(conn):  # 2
+        shared = jobs.paths.shared_profile
+        if shared is not None and not shared.is_dir():
+            # settings.yaml (backfill_days) lives in the profile: do not load the history with the defaults (D-087)
+            log.warning("startup: cache empty but the shared profile folder %s is not reachable: no backfill", shared)
+            return None
         h_state = repo.tier_states(conn).get("H", {})
         cd = h_state.get("cooldown_until")
         if cd and cd > clock():

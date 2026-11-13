@@ -202,6 +202,9 @@ def load_state(paths: Paths, today: dt.date | None = None) -> tuple[CoachingStat
     path = paths.config_dir / STATE_FILE
     try:
         if not path.exists():
+            if paths.shared_profile is not None and not path.parent.is_dir():
+                # "no state yet" would be a lie, and the coach would start a new one (D-087)
+                return None, [f"{STATE_FILE} non disponibile (cartella condivisa del profilo non raggiungibile)"]
             return None, []
         text = path.read_text(encoding="utf-8")
         mtime = dt.datetime.fromtimestamp(path.stat().st_mtime, dt.UTC).astimezone()
@@ -247,8 +250,7 @@ def save_state(paths: Paths, state: CoachingState, now: dt.datetime,
     if len(text) > MAX_STATE_CHARS:
         n, cap = f"{len(text):,}".replace(",", " "), f"{MAX_STATE_CHARS:,}".replace(",", " ")
         raise StateError(f"state too large ({n} characters, max {cap}): remove resolved items")
-    path = paths.config_dir / STATE_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = paths.writable_config_dir() / STATE_FILE
     tmp = path.with_name(path.name + ".tmp")
     try:
         with tmp.open("w", encoding="utf-8", newline="\n") as fh:

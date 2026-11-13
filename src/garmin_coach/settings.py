@@ -166,11 +166,16 @@ class ContextSettings(_Model):
     state_stale_days: int = 7  # a coaching state older than this is flagged and must be confirmed (D-063)
 
 
+class DashboardSettings(_Model):
+    auto_update: bool = True  # rewrite the page after every refresh that stored new data, once it exists
+
+
 class Settings(_Model):
     sync: SyncSettings = Field(default_factory=SyncSettings)
     fit: FitSettings = Field(default_factory=FitSettings)
     optional_endpoints: OptionalEndpoints = Field(default_factory=OptionalEndpoints)
     context: ContextSettings = Field(default_factory=ContextSettings)
+    dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
 
     def ttl_minutes(self, tier: str) -> int:
         return int(self.sync.ttl_minutes.get(tier, 60))

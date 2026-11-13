@@ -28,3 +28,5 @@ context:
   weekly_token_budget: 6000
   recent_activities: 10
   state_stale_days: 7            # a coaching state older than this is flagged and confirmed with the athlete
+dashboard:
+  auto_update: true              # rewrite <app data>/dashboard/index.html after every sync, once it exists

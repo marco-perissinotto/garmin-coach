@@ -45,7 +45,8 @@ Tre idee alla base:
 | 3 | Server MCP completo (tool, risorse, prompt), integrazione con Claude Desktop e Claude Code | fatta |
 | 4 | Secondo computer (Mac): profilo in una cartella condivisa, avviso di scadenza della chiave | fatta, prova sul Mac in corso |
 | 5a | File FIT: giri, ripetute, tempo nelle zone, dinamiche di corsa e pedalata, deriva cardiaca ([docs/FIT.md](docs/FIT.md)) | fatta, verifiche dal vivo in corso |
-| 5–6 | Opzionali: nutrizione, dashboard locale | da fare |
+| 6 | Dashboard locale: una pagina con forma, obiettivo, discipline, salute e cosa cambiare ([docs/DASHBOARD.md](docs/DASHBOARD.md)) | fatta |
+| 5 | Opzionale: idratazione e SpO2 nei pack. Scartati: nutrizione, flusso per ChatGPT, tunnel per usare il coach dal browser (D-092) | da fare |
 
 Il piano completo è in [docs/PLAN.md](docs/PLAN.md); le decisioni prese durante l'implementazione, con le
 motivazioni, in [docs/DECISIONS.md](docs/DECISIONS.md).
@@ -200,11 +201,31 @@ Cosa sapere:
 | `garmin-coach profile show \| link <cartella> \| unlink` | Dove stanno i file personali; `link` li sposta in una cartella condivisa tra i tuoi computer, `unlink` torna a quelli locali ([Usare due computer](#usare-due-computer)) |
 | `garmin-coach context show [daily\|weekly\|events\|athlete\|recent\|instructions] [--offline]` | Stampa un pack pronto da incollare in una chat; senza `--offline` aggiorna prima i dati che servono |
 | `garmin-coach context build [--offline]` | Ricalcola le metriche e riscrive tutti i pack in `<dati>/context/` |
-| `garmin-coach context export --zip [--offline]` | Aggiorna tutto e impacchetta i pack in uno zip (per esempio per un Project di ChatGPT) |
+| `garmin-coach context export --zip [--offline]` | Aggiorna tutto e impacchetta i pack in uno zip (per esempio per caricarli a mano in un'altra chat) |
+| `garmin-coach dashboard [--open] [--refresh]` | Rigenera la dashboard dalla cache e, con `--open`, la apre nel browser; `--refresh` aggiorna prima i dati di oggi ([La dashboard](#la-dashboard)) |
 | `garmin-coach mcp [--http --port 8765]` | Avvia il server MCP per Claude. Se la cache è vuota, fa partire da solo il caricamento dello storico. `--http` lo espone solo su `127.0.0.1` con un token casuale stampato all'avvio |
 | `garmin-coach install claude-desktop \| claude-code [--dry-run]` | Registra il server in Claude Desktop o in Claude Code |
 
 Codici di uscita di `backfill`, `fit backfill` e `sync`: 0 completato, 2 parziale (riprende al prossimo avvio), 1 fallito.
+
+## La dashboard
+
+Una pagina sola, nel browser, che legge la tua forma e ti dice cosa sta cambiando: dove vai forte, dove stai calando,
+su cosa concentrarti verso la gara obiettivo, cosa tenere d'occhio, e qualche regolarità che emerge dalla tua storia
+(per esempio quanto ti costa un giorno duro in HRV). Ogni frase cita i numeri e quante sedute o notti li sostengono.
+Sotto ci sono i grafici: la forma verso la gara confrontata con le stagioni passate, carico e freschezza, ore e
+intensità per settimana, l'efficienza di corsa, bici e nuoto, HRV, FC a riposo e sonno, il piano concordato e le
+ultime attività.
+
+- Dalla chat: `/coach dashboard` in Claude Code, oppure «aprimi la dashboard» in Claude Desktop. Il coach la
+  rigenera, la apre e ne commenta i punti principali.
+- Dal terminale: `garmin-coach dashboard --open`.
+- Si aggiorna da sola dopo ogni sincronizzazione, una volta creata la prima volta (`dashboard.auto_update` in
+  `settings.yaml`).
+- Il pulsante «Chiedi al coach» accanto a ogni frase e a ogni attività copia una domanda da incollare nella chat.
+
+Il file è `<dati>/dashboard/index.html`: resta su questo computer come la cache, non va nella cartella condivisa e si
+apre anche senza connessione. Come sono calcolati i numeri: [docs/DASHBOARD.md](docs/DASHBOARD.md).
 
 ## Cosa legge il coach
 

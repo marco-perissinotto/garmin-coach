@@ -652,8 +652,8 @@ and Claude becomes the single coaching front-end through the local MCP server (�
 Kept as low-cost fallbacks, not as goals:
 - `garmin-coach context export --zip` still exists (it is just the rendered packs) in case the owner ever wants a second
   opinion from another assistant by uploading files. Any data an assistant reads is, by definition, sent to that vendor.
-- Exposing the HTTP MCP endpoint through a tunnel for ChatGPT or Copilot Studio stays an optional Phase 6 item and is
-  **not** to be built unless the owner explicitly asks.
+- Exposing the HTTP MCP endpoint through a tunnel for ChatGPT or Copilot Studio was an optional Phase 6 item:
+  **dropped 2026-11-13** (D-092), together with the same tunnel for claude.ai in the browser.
 
 ---
 
@@ -857,12 +857,16 @@ decisions:
 ### Phase 5 — Optional depth
 - FIT download/parse for new activities: laps, intervals, HR/power time-in-zone computed locally; `get_activity(include_laps=true)`.
   **Done as Phase 5a** (`docs/FIT.md`, decisions D-070 onwards).
-- Nutrition / hydration / SpO2 opt-ins in context.
-- `context export --zip` + `--clipboard` for the ChatGPT Project workflow.
+- Hydration / SpO2 opt-ins in context. Nutrition **dropped 2026-11-13** (D-092): the owner does not log food in
+  Garmin Connect.
+- `--clipboard` for the ChatGPT Project workflow: **dropped 2026-11-13** (D-092), the owner no longer uses ChatGPT.
+  `context export --zip` was built in Phase 2 and stays as it is.
 
 ### Phase 6 — Optional exposure / UI
-- Localhost HTTP MCP + Cloudflare Tunnel + Access for ChatGPT custom connector (explicit owner opt-in only).
+- Localhost HTTP MCP + Cloudflare Tunnel + Access for a remote connector (ChatGPT, or claude.ai in the browser):
+  **dropped 2026-11-13** (D-092). `mcp --http` stays bound to `127.0.0.1` as built in Phase 3.
 - Small local dashboard (Streamlit or a static HTML page generated from `context.json`) — matches the original folder name "custom-garmin-dashboard" but is not needed for the coaching goal.
+  **Done 2026-11-13** as a static page built from the cache, with rule-based findings (`docs/DASHBOARD.md`, D-093).
 
 ---
 

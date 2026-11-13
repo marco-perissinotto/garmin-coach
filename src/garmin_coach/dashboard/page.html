@@ -44,8 +44,10 @@ p { margin: 0 0 8px; }
 .muted { color: var(--muted); font-size: 13px; }
 .num { font-variant-numeric: tabular-nums; }
 a { color: var(--accent); }
-header.top { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; margin-bottom: 20px; }
-.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+header.top { margin-bottom: 12px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; position: sticky; top: 0; z-index: 10; background: var(--page); padding: 10px 0; margin: -4px 0 16px; border-bottom: 1px solid var(--grid); }
+.controls .lbl-c { font-size: 13px; color: var(--ink2); }
+.controls .sp { flex: 1; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
 .seg button { border: 0; background: none; color: var(--ink2); font: inherit; font-size: 13px; padding: 6px 12px; cursor: pointer; }
 .seg button + button { border-left: 1px solid var(--border); }
@@ -471,6 +473,7 @@ const better = (delta, goodSign) => delta == null || delta === 0 || !goodSign ? 
       state.range = d; try { localStorage.setItem("gc-range", d); } catch (e) {}
       ev.currentTarget.parentNode.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b === ev.currentTarget)));
       state.redraw.forEach(f => f());
+      toast(`Grafici nel tempo: ultimi ${label}`);
     } })));
   const themes = [["auto", "Auto"], ["light", "Chiaro"], ["dark", "Scuro"]];
   let theme = document.documentElement.dataset.theme || "auto"; try { theme = localStorage.getItem("gc-theme") || theme; } catch (e) {}
@@ -482,8 +485,8 @@ const better = (delta, goodSign) => delta == null || delta === 0 || !goodSign ? 
   } })));
   const age = f.activities_age_min == null ? "mai aggiornate" : f.activities_age_min < 60 ? `aggiornate ${f.activities_age_min} min fa` : f.activities_age_min < 2880 ? `aggiornate ${Math.round(f.activities_age_min / 60)} h fa` : `aggiornate ${Math.round(f.activities_age_min / 1440)} giorni fa`;
   app.append(el("header", { class: "top" },
-    el("div", null, el("h1", { text: "Il tuo stato di forma" }), el("div", { class: "sub", text: `${D.today_label} · dati fino al ${dmy(f.data_through)} · attività ${age}` })),
-    el("div", { class: "controls" }, ranges, tsel)));
+    el("h1", { text: "Il tuo stato di forma" }), el("div", { class: "sub", text: `${D.today_label} · dati fino al ${dmy(f.data_through)} · attività ${age}` })),
+    el("div", { class: "controls" }, el("span", { class: "lbl-c", text: "Periodo dei grafici" }), ranges, el("span", { class: "sp" }), tsel));
   if (f.stale) app.append(el("div", { class: "warnbar", text: `Dati non aggiornati: ${f.stale}. Chiedi al coach di aggiornarli o esegui garmin-coach sync.` }));
   if (D.problems && D.problems.length) app.append(el("div", { class: "warnbar", text: "File personali: " + D.problems.join("; ") }));
 })();

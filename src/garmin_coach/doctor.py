@@ -11,10 +11,11 @@ from pathlib import Path
 
 import yaml
 
+from . import profile
 from .clock import Clock, local_today, system_clock
 from .garmin import endpoints as ep
 from .garmin.client import GarminClient, GarminError
-from .secrets import key_file_status, redact
+from .secrets import KEY_WARN_DAYS, key_file_status, redact
 from .settings import CONFIG_FILES, KNOWLEDGE_FILES, STATE_FILE, Paths, Settings, is_cloud_synced
 from .state import derived, load_state
 from .store import db, repo
@@ -57,8 +58,9 @@ def run_doctor(paths: Paths, settings: Settings, *, repo_root: Path, online: boo
             checks.append(Check("API key", True, detail + ("" if key.permissions_ok else "; permissions not checked on Windows")))
         if is_cloud_synced(key.path):
             checks.append(Check("API key location", False, "key file is inside a cloud-synced folder"))
-        if key.age_days is not None and key.age_days > 350:
-            checks.append(Check("API key age", False, "key is older than 350 days: rotate it soon", critical=False))
+        if key.age_days is not None and key.age_days > KEY_WARN_DAYS:
+            checks.append(Check("API key age", False, f"key is older than {KEY_WARN_DAYS} days: rotate it soon",
+                                critical=False))
 
     if online and key.source != "missing":
         client = client_factory() if client_factory else GarminClient(budget=2, min_gap_s=0)
@@ -88,6 +90,11 @@ def run_doctor(paths: Paths, settings: Settings, *, repo_root: Path, online: boo
                             f"history {'NOT loaded yet' if cache_empty else 'loaded'})"))
     except Exception as exc:  # noqa: BLE001
         checks.append(Check("database", False, f"{paths.db}: {redact(str(exc))}"))
+
+    prof = profile.status(paths)
+    checks.extend(_profile_checks(prof))
+    if prof.shared and not prof.reachable:
+        return checks, "make the shared profile folder reachable, then run: garmin-coach doctor"
 
     for name in CONFIG_FILES:
         p = paths.config_dir / name
@@ -131,6 +138,22 @@ def run_doctor(paths: Paths, settings: Settings, *, repo_root: Path, online: boo
         else:
             nxt = client_step or "garmin-coach status"
     return checks, nxt
+
+
+def _profile_checks(prof: profile.ProfileStatus) -> list[Check]:
+    """Where the personal files live (D-085): a linked folder must be there, and hold one copy of each file."""
+    if not prof.shared:
+        return [Check("profile folder", True, f"{prof.path} (this machine only; to share it between machines: "
+                      "garmin-coach profile link <folder>)")]
+    if not prof.reachable:
+        return [Check("profile folder", False, f"shared folder {prof.path} is not reachable: start the sync client "
+                      "and keep the folder available offline (or go back with: garmin-coach profile unlink)")]
+    out = [Check("profile folder", True, f"{prof.path} (shared between machines)")]
+    if prof.conflicts:
+        out.append(Check("profile conflicts", False, "possible conflict copies: " + ", ".join(prof.conflicts)
+                         + ". Two machines wrote the same file: keep one version and delete the other",
+                         critical=False))
+    return out
 
 
 def _fit_checks(paths: Paths, settings: Settings, today: date) -> list[Check]:

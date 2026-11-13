@@ -33,8 +33,8 @@ from ..garmin.chunking import parse_range_key
 from ..garmin.endpoints import REFRESH_TIERS, SYNC_TIERS, Tier
 from ..metrics import compute, sport
 from ..metrics import events as events_m
-from ..secrets import key_file_status, redact
-from ..settings import STATE_FILE
+from ..secrets import key_file_status, key_warning, redact
+from ..settings import STATE_FILE, ProfileUnavailable
 from ..status import build_status
 from ..store import repo
 from ..sync import jobs as jobs_mod
@@ -75,7 +75,7 @@ def _safe[F: Callable[..., dict[str, Any]]](fn: F) -> F:
     def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
         try:
             return fn(*args, **kwargs)
-        except InputError as exc:
+        except (InputError, ProfileUnavailable) as exc:
             return {"error": str(exc)}
         except Exception as exc:  # noqa: BLE001 - a tool must answer, never crash the server
             log.exception("MCP tool %s failed", fn.__name__)
@@ -185,6 +185,9 @@ class CoachService:
         if key.source == "missing":
             out["error"] = (f"Garmin API key not found at {key.path}: run `garmin-coach doctor`. "
                             "Answers come from the local cache only.")
+        warning = key_warning(key)
+        if warning:
+            out["key_warning"] = warning
         size = len(json.dumps(out, default=str))
         if size > MAX_PAYLOAD_CHARS:
             return {"error": f"response too large ({size} characters): ask for a shorter range or fewer details",
@@ -307,9 +310,8 @@ class CoachService:
             raise InputError(f"the note is too long ({len(note)} characters, max {MAX_NOTE_CHARS}): summarise it")
         note = note.lstrip("-* ").strip()
         line = f"- {self._today().isoformat()} {note}"
-        path = self.app.paths.config_dir / "coach-notes.md"
         with self._note_lock:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            path = self.app.paths.writable_config_dir() / "coach-notes.md"
             existing = path.read_text(encoding="utf-8") if path.exists() else ""
             sep = "" if not existing or existing.endswith("\n") else "\n"
             with path.open("a", encoding="utf-8", newline="\n") as fh:
@@ -337,6 +339,8 @@ class CoachService:
         paths = self.app.paths
         with self._state_lock:
             existing, problems = state_m.load_state(paths, self._today())
+            if paths.shared_profile is not None:
+                paths.writable_config_dir()  # ProfileUnavailable with the reason, before any other message
             if problems and len(passed) < len(state_m.SECTIONS):
                 detail = problems[0].removeprefix(f"{STATE_FILE} non valido ").strip("()")
                 raise InputError(f"{STATE_FILE} cannot be read ({detail}): fix it by hand, or pass all three "

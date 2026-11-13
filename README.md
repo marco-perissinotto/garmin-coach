@@ -43,7 +43,7 @@ Tre idee alla base:
 | 1 | Sincronizzazione, cache, caricamento dello storico, aggiornamento su richiesta, lavori in background | fatta |
 | 2 | Metriche (carico, forma, prontezza) e "context pack" per il coach | fatta |
 | 3 | Server MCP completo (tool, risorse, prompt), integrazione con Claude Desktop e Claude Code | fatta |
-| 4 | Secondo computer (Mac), avviso di scadenza della chiave, rifiniture | da fare |
+| 4 | Secondo computer (Mac): profilo in una cartella condivisa, avviso di scadenza della chiave | fatta, prova sul Mac in corso |
 | 5a | File FIT: giri, ripetute, tempo nelle zone, dinamiche di corsa e pedalata, deriva cardiaca ([docs/FIT.md](docs/FIT.md)) | fatta, verifiche dal vivo in corso |
 | 5–6 | Opzionali: nutrizione, dashboard locale | da fare |
 
@@ -114,7 +114,8 @@ Cosa trova Claude nel server:
 | Cache, log, configurazione personale | `%LOCALAPPDATA%\garmin-coach\` | `~/Library/Application Support/garmin-coach/` |
 
 La variabile d'ambiente `GARMIN_COACH_HOME` sposta la cartella dati dove preferisci. Nessuno di questi percorsi è
-sincronizzato dal cloud, e niente di tutto questo finisce nel repo.
+sincronizzato dal cloud, e niente di tutto questo finisce nel repo. L'unica eccezione, se la vuoi, sono i tuoi file
+personali: vedi [Usare due computer](#usare-due-computer).
 
 I file FIT originali delle attività stanno in `<dati>/fit/` (uno zip per attività, da pochi kB a circa 1 MB): per un
 archivio di circa 1 300 attività contate 0,3–1 GB. Servono a ricalcolare le analisi senza riscaricare nulla se il
@@ -140,8 +141,48 @@ Vanno nella cartella `<dati>/config/`. I modelli sono in [config/](config/):
 | `coaching-state.yaml` | Opzionale, lo scrive il coach: lo stato attuale (sintomi riferiti, piano dei prossimi giorni con le condizioni che lo cambiano, decisioni aperte e prese). Si sovrascrive, non è un diario; si può correggere a mano |
 | `settings.yaml` | Opzionale: scadenze della cache, ritmo delle chiamate, giorni di storico da caricare, file FIT (blocco `fit:`, vedi [config/settings.example.yaml](config/settings.example.yaml)) |
 
-Questa cartella è l'unica cosa da copiare tra un computer e l'altro: ogni computer tiene la propria cache e la
-aggiorna per conto suo.
+Questa cartella è l'unica cosa da tenere allineata tra un computer e l'altro: ogni computer tiene la propria cache
+e la aggiorna per conto suo.
+
+## Usare due computer
+
+Per avere lo stesso profilo, la stessa storia e lo stesso stato di coaching su due computer, metti i file personali
+in una cartella che un client di sincronizzazione tiene allineata (Google Drive, iCloud Drive, Dropbox...). Database,
+file FIT e chiave API restano su ogni computer e non vanno mai in quella cartella.
+
+Sul primo computer, quello che ha già i file:
+
+```sh
+uv run garmin-coach profile link "G:\My Drive\garmin-coach"     # la cartella viene creata e riempita con i tuoi file
+```
+
+Sul secondo (qui un Mac), dopo aver installato il client di sincronizzazione e aspettato che la cartella sia arrivata:
+
+```sh
+git clone <url-del-repo> garmin-coach && cd garmin-coach && uv sync
+# copia a mano la chiave in ~/.config/garmin/connect-personal-api-key, poi: chmod 600 su quel file
+uv run garmin-coach profile link ~/Library/CloudStorage/GoogleDrive-<account>/"My Drive"/garmin-coach
+uv run garmin-coach doctor
+uv run garmin-coach install claude-desktop                      # poi chiudi e riapri Claude Desktop
+```
+
+Il nome della cartella di Drive sul Mac può essere tradotto (per esempio `Il mio Drive`): controlla nel Finder.
+Al primo avvio il secondo computer carica da solo lo storico da Garmin; i file FIT del passato si caricano con
+`garmin-coach fit backfill`.
+
+Cosa sapere:
+
+- Imposta la cartella come **disponibile offline** nel client di sincronizzazione. Se la cartella non c'è (client
+  spento, file solo online senza rete) il coach lo dice e non scrive nulla: non parte con un profilo vuoto.
+- Prima di cambiare computer lascia al client il tempo di sincronizzare. Se due computer scrivono lo stesso file
+  prima che la sincronizzazione sia finita, il client ne tiene due copie (per esempio `coaching-state (1).yaml`):
+  `doctor`, `status` e il brief lo segnalano; tieni la versione giusta e cancella l'altra.
+- I file che avevi in `<dati>/config/` restano dove sono come copia di sicurezza e non vengono più letti.
+  `garmin-coach profile show` dice quale cartella è in uso; `garmin-coach profile unlink` torna ai file locali,
+  riportandoci prima quelli condivisi.
+- Dopo `profile link` riavvia Claude: il server MCP legge la posizione della cartella all'avvio.
+- Nel browser (claude.ai) il coach non funziona: lì Claude raggiunge solo server remoti, non quello sul tuo computer.
+  Usa l'app Claude Desktop o Claude Code.
 
 ## Comandi
 
@@ -156,6 +197,7 @@ aggiorna per conto suo.
 | `garmin-coach normalize --all` | Ricostruisce le tabelle dai dati grezzi salvati, senza contattare Garmin |
 | `garmin-coach status [--watch] [--json]` | Età della cache per livello, storico caricato?, lavoro in corso con avanzamento e stima di fine, quante attività hanno il FIT |
 | `garmin-coach jobs list \| show <id> \| cancel <id> \| prune` | Storico e controllo dei lavori di sincronizzazione |
+| `garmin-coach profile show \| link <cartella> \| unlink` | Dove stanno i file personali; `link` li sposta in una cartella condivisa tra i tuoi computer, `unlink` torna a quelli locali ([Usare due computer](#usare-due-computer)) |
 | `garmin-coach context show [daily\|weekly\|events\|athlete\|recent\|instructions] [--offline]` | Stampa un pack pronto da incollare in una chat; senza `--offline` aggiorna prima i dati che servono |
 | `garmin-coach context build [--offline]` | Ricalcola le metriche e riscrive tutti i pack in `<dati>/context/` |
 | `garmin-coach context export --zip [--offline]` | Aggiorna tutto e impacchetta i pack in uno zip (per esempio per un Project di ChatGPT) |
@@ -215,6 +257,8 @@ i dati in cache con l'avviso che potrebbero non essere aggiornati.
 - Il server MCP comunica solo con il processo di Claude sulla stessa macchina (stdio); non apre porte di rete.
   L'opzione `--http` ascolta solo su `127.0.0.1` e richiede un token casuale generato a ogni avvio.
 - Le configurazioni generate per Claude contengono solo il percorso di `uv` e del repo: nessuna chiave.
+- Se usi una cartella condivisa per i file personali, lì finiscono dati di salute (sintomi, infortuni): usa un account
+  personale, non uno aziendale. La chiave API, il database e i file FIT non ci vanno mai.
 - Il gancio pre-commit e un test rifiutano qualsiasi file che contenga una stringa simile a una chiave o a un token.
 
 ## Sviluppo

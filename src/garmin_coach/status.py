@@ -6,10 +6,11 @@ import sqlite3
 from datetime import timedelta
 from typing import Any
 
+from . import profile
 from .clock import Clock, local_today, parse_iso, system_clock
 from .fit import store as fit_store
 from .garmin.endpoints import REFRESH_TIERS, Tier
-from .secrets import key_file_status
+from .secrets import key_file_status, key_warning
 from .settings import Paths, Settings, get_paths
 from .store import repo
 from .sync.jobs import active_jobs, list_jobs
@@ -85,6 +86,7 @@ def build_status(conn: sqlite3.Connection, settings: Settings, clock: Clock = sy
         for j in list_jobs(conn, 5) if j["status"] not in ("queued", "running")
     ]
     key = key_file_status()
+    paths = paths or get_paths()
     return {
         "history_loaded": h.get("last_completed_at") is not None,
         "history_loaded_at": h["last_completed_at"].isoformat() if h.get("last_completed_at") else None,
@@ -94,5 +96,7 @@ def build_status(conn: sqlite3.Connection, settings: Settings, clock: Clock = sy
         "cooldown_until": max(cooldowns).isoformat() if cooldowns else None,
         "last_error": max(errors, key=lambda e: e[0])[1] if errors else None,
         "key_age_days": key.age_days,
-        "fit": _fit_block(conn, settings, paths or get_paths(), clock, states, running),
+        "key_warning": key_warning(key),
+        "profile": profile.status(paths).as_dict(),
+        "fit": _fit_block(conn, settings, paths, clock, states, running),
     }

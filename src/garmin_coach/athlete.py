@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from . import profile
 from .settings import Paths
 from .state import CoachingState, load_state
 
@@ -96,20 +97,33 @@ def _read_yaml(path: Path, problems: list[str]) -> Any:
     except yaml.YAMLError as exc:
         problems.append(f"{path.name} non valido ({type(exc).__name__})")
         return None
+    except (OSError, UnicodeDecodeError) as exc:  # e.g. an online-only file of a sync client while offline
+        problems.append(f"{path.name} non leggibile ({type(exc).__name__})")
+        return None
 
 
 def _read_text(path: Path, problems: list[str]) -> str | None:
     if not path.exists():
         problems.append(f"{path.name} mancante")
         return None
-    text = path.read_text(encoding="utf-8").strip()
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        problems.append(f"{path.name} non leggibile ({type(exc).__name__})")
+        return None
     return text or None
 
 
 def load_inputs(paths: Paths, today: date | None = None) -> Inputs:
     """``today`` (from the injectable clock) enables the coaching-state date rules that cannot expire with time."""
     inp = Inputs()
-    cfg = paths.config_dir
+    prof = profile.status(paths)
+    inp.problems += prof.problems()
+    if prof.shared and not prof.reachable:  # one clear problem instead of four "mancante" (D-087)
+        inp.state, state_problems = load_state(paths, today)
+        inp.problems += state_problems
+        return inp
+    cfg = prof.path
     data = _read_yaml(cfg / "athlete.yaml", inp.problems)
     if isinstance(data, dict):
         try:

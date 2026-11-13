@@ -1,5 +1,5 @@
-"""garmin-coach command line (PLAN §6.1, §9.1): doctor, backfill, sync, normalize, status, jobs, context, fit, mcp,
-install."""
+"""garmin-coach command line (PLAN §6.1, §9.1): doctor, backfill, sync, normalize, status, jobs, context, fit,
+profile, mcp, install."""
 
 from __future__ import annotations
 
@@ -55,6 +55,8 @@ install_cli = typer.Typer(no_args_is_help=True, help="Register the MCP server in
 app_cli.add_typer(install_cli, name="install")
 fit_cli = typer.Typer(no_args_is_help=True, help="FIT files: historical download, offline re-parse, inspection.")
 app_cli.add_typer(fit_cli, name="fit")
+profile_cli = typer.Typer(no_args_is_help=True, help="Personal files: where they live, sharing them between machines.")
+app_cli.add_typer(profile_cli, name="profile")
 
 
 class _LazyConsole:
@@ -268,6 +270,15 @@ def _status_table(s: dict[str, Any]) -> Any:
         t.add_row("H (history)" if name == "H" else name, age, ttl, state, note[:70])
     hist = f"loaded {s['history_loaded_at']}" if s["history_loaded"] else "[yellow]not loaded[/]"
     t.caption = f"history: {hist} | key age: {s['key_age_days']} d"
+    if s.get("key_warning"):
+        t.caption += f"\n[yellow]{s['key_warning']}[/]"
+    prof = s.get("profile") or {}
+    if prof.get("shared"):
+        t.caption += f"\nprofile: {prof['path']} (shared)"
+        if not prof["reachable"]:
+            t.caption += " [red]NOT REACHABLE[/]"
+        elif prof["conflicts"]:
+            t.caption += f" [yellow]possible conflict copies: {', '.join(prof['conflicts'])}[/]"
     fit = s.get("fit") or {}
     if fit:
         t.caption += (f"\nFIT: {fit['ok']} ok · {fit['pending']} pending · {fit['no_file']} no file · "
@@ -543,6 +554,93 @@ def mcp(
     from .mcp.server import serve
 
     serve(_app(), http=http, port=port)
+
+
+# -- personal files (PLAN §5.1, D-085..D-089) ---------------------------------------------------------------------
+@profile_cli.command("show")
+def profile_show() -> None:
+    """Where the personal files are read from, which ones are there, and possible conflict copies."""
+    from datetime import datetime
+
+    from . import profile as profile_m
+    from .settings import PROFILE_FILES
+
+    a = _app()
+    st = profile_m.status(a.paths)
+    kind = "shared between machines" if st.shared else "this machine only"
+    console.print(f"profile folder: {st.path} ({kind})", highlight=False)
+    if not st.reachable:
+        console.print("[red]not reachable[/]: start the sync client and keep the folder available offline")
+        raise typer.Exit(1)
+    for name in PROFILE_FILES:
+        p = st.path / name
+        when = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M") if p.is_file() else "missing"
+        console.print(f"  {name:<22} {when}", highlight=False)
+    if st.conflicts:
+        console.print(f"[yellow]possible conflict copies:[/] {', '.join(st.conflicts)}", highlight=False)
+        console.print("Two machines wrote the same file: keep one version and delete the other.")
+    if st.shared:
+        console.print(f"local copy, not read while linked: {a.paths.local_config_dir}", highlight=False)
+
+
+@profile_cli.command("link")
+def profile_link(
+    folder: Annotated[Path, typer.Argument(help="A folder kept in sync between your machines, e.g. in Google Drive.")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask before copying into an empty folder.")] = False,
+) -> None:
+    """Read and write the personal files in FOLDER instead of the app data dir. Database, FIT files and the API
+    key stay on this machine. An empty folder receives this machine's files; a folder that already holds a profile
+    is used as it is."""
+    from . import profile as profile_m
+
+    a = _app()
+    try:
+        plan = profile_m.plan_link(a.paths, folder)
+        if plan.will_copy and not yes:
+            console.print(f"{plan.target} holds no profile yet.", highlight=False)
+            console.print("If another machine already shares its profile there, answer no and wait for the sync "
+                          "client to download it.")
+            if not typer.confirm(f"Copy the {len(plan.in_local)} personal files of this machine there?"):
+                raise typer.Exit(1)
+        plan = profile_m.link(a.paths, folder)
+    except (profile_m.ProfileError, OSError) as exc:
+        err.print(f"[red]{exc}[/]", highlight=False)
+        raise typer.Exit(1) from None
+    console.print(f"profile folder: {plan.target}", highlight=False)
+    if plan.will_copy:
+        console.print(f"copied: {', '.join(plan.in_local)}", highlight=False)
+        console.print(f"The originals stay in {a.paths.local_config_dir} as a backup and are no longer read.",
+                      highlight=False)
+    elif plan.in_target:
+        console.print(f"using the profile already there: {', '.join(plan.in_target)}", highlight=False)
+        if plan.shadowed:
+            console.print(f"[yellow]Not copied, and no longer read:[/] {', '.join(plan.shadowed)} in "
+                          f"{a.paths.local_config_dir} differ from the shared ones.", highlight=False)
+    else:
+        console.print("The folder is empty and so is the local profile: fill it from config/*.example.*")
+    console.print("Next: restart Claude (the MCP server reads the folder at start), then: garmin-coach doctor")
+
+
+@profile_cli.command("unlink")
+def profile_unlink() -> None:
+    """Go back to the personal files in the app data dir, copying the shared ones there first."""
+    from . import profile as profile_m
+    from .clock import local_today
+
+    a = _app()
+    try:
+        res = profile_m.unlink(a.paths, local_today(a.clock()))
+    except (profile_m.ProfileError, OSError) as exc:
+        err.print(f"[red]{exc}[/]", highlight=False)
+        raise typer.Exit(1) from None
+    console.print(f"unlinked from {res.was}; profile folder: {a.paths.local_config_dir}", highlight=False)
+    if res.copied:
+        console.print(f"copied back: {', '.join(res.copied)}", highlight=False)
+    else:
+        console.print("[yellow]The shared folder was not reachable: the local files are those of the day you "
+                      "linked.[/]")
+    if res.backups:
+        console.print(f"previous local versions kept as: {', '.join(res.backups)}", highlight=False)
 
 
 # -- client registration (PLAN §9.1) ------------------------------------------------------------------------------

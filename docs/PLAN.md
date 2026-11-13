@@ -32,7 +32,9 @@
 7. **Deterministic context.** The context-building step is pure code, no LLM calls. The LLM is the *consumer*, not part
    of the pipeline.
 8. **Keep the repo and the data separate.** Code in git (private). Data, secrets, token cache in OS user directories
-   that are *not* synced by OneDrive/iCloud.
+   that are *not* synced by OneDrive/iCloud. One exception, at the owner's choice: the personal text files may be
+   linked to a folder of a sync client so that two machines share them (§5.1, D-085). Never the key, the database or
+   the FIT files.
 9. **Do not store the `.txt` files from the original folder in the repo.** `api-key.txt` must be deleted after the key is
    moved to its proper location (see Phase 0).
 
@@ -257,10 +259,13 @@ garmin-coach/
 | SQLite DB | `<app data>/garmin.db` | same |
 | FIT archive (`fit.keep_files`, default on; summaries in the `activity_fit` table) | `<app data>/fit/<activityId>.zip` | same |
 | Context output | `<app data>/context/` | same |
-| User config (`athlete.yaml`, `events.yaml`, `settings.yaml`) and knowledge (`history.md`, `coach-notes.md`) | `<app data>/config/` — the owner may keep this folder in a **private** git repo or copy it between machines by hand; it is the only thing that must be kept in sync | same |
+| User config (`athlete.yaml`, `events.yaml`, `settings.yaml`), knowledge (`history.md`, `coach-notes.md`) and `coaching-state.yaml` | `<app data>/config/`, or the folder set with `garmin-coach profile link <folder>` (a folder of a sync client, e.g. `G:\My Drive\garmin-coach`). It is the only thing that must be kept in sync between machines; the link is a one-line pointer file `<app data>/profile-path` (D-085..D-089) | same (e.g. `~/Library/CloudStorage/GoogleDrive-<account>/My Drive/garmin-coach`) |
 | Logs | `<app data>/logs/garmin-coach.log` (rotating, redacted) | same |
 
-`GARMIN_COACH_HOME` env var overrides the app data dir. **None of these paths are inside OneDrive/iCloud/Desktop/Documents.**
+`GARMIN_COACH_HOME` env var overrides the app data dir. **None of these paths are inside OneDrive/iCloud/Desktop/Documents**,
+except a linked profile folder. A linked folder that is not reachable is reported (brief flag, `doctor`, `status`,
+`get_sync_status.profile`) and never created; writes are refused; an empty cache is not backfilled meanwhile, because
+`settings.yaml` lives there. Conflict copies left by the sync client are reported the same way.
 Windows note: "Known Folder Move" syncs Desktop/Documents/Pictures; `%LOCALAPPDATA%` and `%USERPROFILE%\.config` are not synced.
 
 ### 5.2 SQLite schema (minimum)
@@ -373,6 +378,7 @@ garmin-coach context export --zip [--offline]      # bundle packs for a ChatGPT 
 garmin-coach mcp [--http --port 8765]              # start MCP server (stdio default); runs the startup check first
 garmin-coach status [--watch] [--json]             # cache age per tier, backfill done?, running job with progress, cooldowns, key age, FIT coverage
 garmin-coach jobs [list|show <id>|cancel <id>|prune]   # job history and control (§6.7)
+garmin-coach profile [show|link <folder>|unlink]       # where the personal files live; share them between machines (§5.1)
 ```
 There is **no** `schedule` or `daemon` command. Garmin is contacted only while a `garmin-coach` process is alive and only
 when the startup check, the freshness gate, or an explicit `sync`/`backfill` decides it is needed.
@@ -826,9 +832,14 @@ decisions:
 **Accept:** from a fresh clone, `uv sync` + key file + `garmin-coach install claude-desktop` + restart Claude Desktop takes < 10 min and "How should I train today?" produces an answer grounded in today's brief, the athlete history and the events list without any manual paste; the second question within the TTL makes no Garmin call (`get_sync_status` confirms); `refresh(force=true)` reloads on demand and the model can report its progress; on a fresh install the history loads with no command typed by the owner; in Claude Code `/coach` works from the repo folder.
 
 ### Phase 4 — Second machine + hardening (½ day)
-1. README section for the Mac: clone private repo, `uv sync`, key file, copy the `config/` knowledge folder, `doctor`, `install claude-desktop`. Nothing to schedule and nothing to backfill by hand: the first server start loads the history; `status --watch` shows it.
+1. README section for the Mac: clone private repo, `uv sync`, key file, `profile link <shared folder>`, `doctor`, `install claude-desktop`. Nothing to schedule and nothing to backfill by hand: the first server start loads the history; `status --watch` shows it.
+   **Implemented 2026-11-13** with a shared profile folder instead of a hand copy (`profile.py`, `garmin-coach profile
+   show|link|unlink`, D-085..D-089). The owner's Mac uses Claude Desktop (local MCP servers do not work in claude.ai
+   in the browser). Still to do by the owner: link the profile on both machines and run the acceptance below.
 1b. `garmin-coach build-mcpb` → `garmin-coach.mcpb` for one-click install in Claude Desktop (§9.1).
 2. Key-expiry reminder: `status`, `get_sync_status` and the daily brief warn when key age (stored at `doctor` time in the app data dir) > 350 days.
+   **Implemented 2026-11-13** from the key file's modification time: `doctor`, `status`, `get_sync_status.key_warning`
+   and a `key_warning` field in every data tool reply, the brief included (D-089).
 3. Latency check: measure the synchronous A+B refresh on both machines; if it regularly exceeds ~10 s, lower `limit` on the activity search or move the per-activity detail calls to the background tier.
 4. Coaching state (§11.3, D-060..D-066) — **implemented 2026-10-30**: `state.py` + `get_coaching_state` /
    `update_coaching_state` + resource + "Stato di coaching" section and flags in the daily brief + SKILL.md (including

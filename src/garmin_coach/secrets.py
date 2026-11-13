@@ -92,6 +92,10 @@ def load_api_key() -> str:
     return resolve_api_key()
 
 
+KEY_VALID_DAYS = 365  # a Personal API key lasts up to one year
+KEY_WARN_DAYS = 350
+
+
 @dataclass
 class KeyFileStatus:
     path: Path
@@ -113,3 +117,12 @@ def key_file_status() -> KeyFileStatus:
         perms_ok = not (st.st_mode & (stat.S_IRWXG | stat.S_IRWXO))
     age = (datetime.now(UTC) - datetime.fromtimestamp(st.st_mtime, UTC)).days
     return KeyFileStatus(path, True, "file", perms_ok, age)
+
+
+def key_warning(status: KeyFileStatus | None = None) -> str | None:
+    """A line for `status`, get_sync_status and every tool reply once the key file is older than KEY_WARN_DAYS."""
+    status = status or key_file_status()
+    if status.age_days is None or status.age_days <= KEY_WARN_DAYS:
+        return None
+    return (f"the Garmin API key is {status.age_days} days old and lasts {KEY_VALID_DAYS} at most: create a new one "
+            "in Garmin Connect (Settings > Personal API), replace the key file and run `garmin-coach doctor`")
